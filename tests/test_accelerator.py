@@ -353,19 +353,38 @@ class TestPidManagement:
 
 
 class TestEnsureDashboardRunning:
-    def test_http_error_response_means_running(self, tmp_data_dir):
-        # A live dashboard that answers GET / with 500 must NOT be respawned —
-        # an error status still proves the server is up and serving.
+    def test_2xx_response_means_running(self, tmp_data_dir):
+        # A healthy dashboard that answers GET / with 200 must be left alone —
+        # no kill, no duplicate spawn.
+        resp = MagicMock()
+        resp.status = 200
+        with (
+            patch("urllib.request.urlopen", return_value=resp),
+            patch("immich_accelerator.__main__.kill_pid") as mock_kill,
+            patch("immich_accelerator.__main__.subprocess.Popen") as mock_popen,
+        ):
+            _ensure_dashboard_running({})
+        mock_kill.assert_not_called()
+        mock_popen.assert_not_called()
+
+    def test_http_500_is_unhealthy_and_respawns(self, tmp_data_dir):
+        # A dashboard wedged on 500 holds the port but never serves. It must be
+        # reclaimed (kill_pid) and respawned, not mistaken for healthy.
         import email.message
         import urllib.error
 
         err = urllib.error.HTTPError("http://localhost:8420/", 500, "err", email.message.Message(), None)
+        fake_proc = MagicMock()
+        fake_proc.pid = 12345
         with (
             patch("urllib.request.urlopen", side_effect=err),
-            patch("immich_accelerator.__main__.subprocess.Popen") as mock_popen,
+            patch("immich_accelerator.__main__.kill_pid") as mock_kill,
+            patch("immich_accelerator.__main__.subprocess.Popen", return_value=fake_proc) as mock_popen,
+            patch("immich_accelerator.__main__._get_process_start_time", return_value="t"),
         ):
             _ensure_dashboard_running({})
-        mock_popen.assert_not_called()
+        mock_kill.assert_called_once_with("dashboard")
+        mock_popen.assert_called_once()
 
     def test_connection_failure_spawns_dashboard(self, tmp_data_dir):
         import urllib.error

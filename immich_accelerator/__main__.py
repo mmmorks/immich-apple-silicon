@@ -3029,21 +3029,37 @@ def _kill_stale_processes():
 
 
 def _ensure_dashboard_running(config: dict) -> None:
-    """Start the dashboard in the background if it isn't already up."""
+    """Start the dashboard in the background unless one is already serving.
+
+    Only a 2xx on GET / counts as healthy. A non-2xx — e.g. a wedged process
+    that 500s on every request because its source directory was deleted out
+    from under it — is treated as unhealthy: the recorded dashboard is killed
+    and a fresh one spawned. A wedged dashboard keeps the port bound while it
+    500s forever, so we must reclaim the port (kill_pid) before respawning or
+    the new process can't bind it; an unanswered probe (connection refused /
+    timeout) likewise falls through to a respawn.
+    """
     import urllib.error as _urlerr
     import urllib.request as _urlreq
 
     port = int(config.get("dashboard_port", 8420))
     try:
-        _urlreq.urlopen(f"http://localhost:{port}/", timeout=2)
-        return  # already running
+        resp = _urlreq.urlopen(f"http://localhost:{port}/", timeout=2)
+        if 200 <= getattr(resp, "status", 0) < 300:
+            return  # already up and serving
+        # A non-2xx that somehow didn't raise — treat as unhealthy below.
     except _urlerr.HTTPError:
-        # The server answered with an error status (e.g. 500) — it IS up and
-        # serving, so don't spawn a duplicate. Only a failed connection means
-        # it's actually down.
-        return
-    except Exception:
+        # The server answered with an error status (e.g. a wedged 500). It's up
+        # enough to hold the port but not serving — replace it.
         pass
+    except Exception:
+        # Connection refused / timeout — nothing is listening.
+        pass
+
+    # Reclaim the port from any wedged or stale dashboard before respawning so
+    # the fresh process can bind it (a no-op if nothing is recorded/alive).
+    kill_pid("dashboard")
+
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     # The handle is duped into the detached Popen below and closed right after;
     # a `with` block would close it before the child inherits the fd.
