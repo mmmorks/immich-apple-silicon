@@ -2810,9 +2810,20 @@ def _install_ml_requirements(ml_dir: Path) -> bool:
 
     log.info("  Installing ML dependencies (this may take a few minutes)...")
     pip = str(ml_dir / "venv" / "bin" / "pip")
-    result = subprocess.run(
-        [pip, "install", "-r", str(req)], capture_output=False, timeout=600
-    )
+    try:
+        result = subprocess.run(
+            [pip, "install", "-r", str(req)], capture_output=False, timeout=600
+        )
+    except subprocess.TimeoutExpired:
+        # Slow network / large wheels blew the 600s budget. Treat as a failed
+        # install so callers fall back to the venv's existing deps rather than
+        # letting the exception crash ML startup under launchd/watch.
+        log.error("  pip install timed out after 600s")
+        return False
+    except OSError as e:
+        # Broken pip shim (ENOEXEC), missing interpreter, etc. — same fallback.
+        log.error("  pip install could not be launched: %s", e)
+        return False
     if result.returncode != 0:
         log.error("  pip install failed")
         return False

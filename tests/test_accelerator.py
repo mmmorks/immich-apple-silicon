@@ -1215,6 +1215,35 @@ class TestFindMlDirRequirementsDrift:
         # marker NOT advanced -> reinstall is retried on the next startup
         assert _requirements_marker(ml).read_text().strip() == "deadbeef"
 
+    def test_returns_ml_dir_when_pip_times_out(self, tmp_path):
+        # A slow network / large wheels can make pip exceed the 600s timeout.
+        # subprocess.run then raises TimeoutExpired — this must NOT propagate
+        # out of _find_ml_dir and crash ML startup; we fall back to old deps.
+        from immich_accelerator.__main__ import _find_ml_dir, _requirements_marker
+        ml = self._make_ml_dir(tmp_path)
+        _requirements_marker(ml).write_text("deadbeef")
+        with patch("immich_accelerator.__main__._ml_dir_candidates", return_value=[ml]), \
+             patch("immich_accelerator.__main__.subprocess.run",
+                   side_effect=subprocess.TimeoutExpired(cmd="pip", timeout=600)) as run:
+            # ML stays available on the old deps rather than going dark
+            assert _find_ml_dir() == ml
+        run.assert_called_once()
+        # marker NOT advanced -> reinstall is retried on the next startup
+        assert _requirements_marker(ml).read_text().strip() == "deadbeef"
+
+    def test_returns_ml_dir_when_pip_raises_oserror(self, tmp_path):
+        # A broken pip shim (ENOEXEC) or missing interpreter raises OSError out
+        # of subprocess.run; same fallback contract — keep ML on old deps.
+        from immich_accelerator.__main__ import _find_ml_dir, _requirements_marker
+        ml = self._make_ml_dir(tmp_path)
+        _requirements_marker(ml).write_text("deadbeef")
+        with patch("immich_accelerator.__main__._ml_dir_candidates", return_value=[ml]), \
+             patch("immich_accelerator.__main__.subprocess.run",
+                   side_effect=OSError("Exec format error")) as run:
+            assert _find_ml_dir() == ml
+        run.assert_called_once()
+        assert _requirements_marker(ml).read_text().strip() == "deadbeef"
+
     def test_fresh_venv_creation_writes_marker(self, tmp_path):
         from immich_accelerator.__main__ import (
             _find_ml_dir, _requirements_marker, _hash_file)
