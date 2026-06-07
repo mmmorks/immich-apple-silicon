@@ -1,6 +1,14 @@
 # Pre-commit gate for the parent repo (the immich-accelerator CLI).
 # Install once with: pre-commit install
-# Mirrors the CI `lint` job: ruff lint + ruff format + the fast pytest suite.
+# Mirrors the CI `lint` job: ruff lint + ruff format + the fast pytest suite,
+# plus a gitleaks secret scan.
+#
+# Why gitleaks runs HERE and not only in CI: a CI secret scan fires only after
+# the push, by which point the secret is already on the remote (and in history,
+# forks, and Actions logs) and must be treated as compromised. Catching it at
+# commit time is the actual prevention; the CI `secrets-scan` job is just a
+# backstop for commits made without these hooks installed. Requires the gitleaks
+# binary on PATH (brew install gitleaks).
 #
 # Note: this only covers the parent repo's files. The ml/ submodule is a
 # separate git repo with its own .pre-commit-config.yaml — submodule file
@@ -17,6 +25,11 @@ repos:
 
   - repo: local
     hooks:
+      - id: gitleaks
+        name: gitleaks (scan staged changes for secrets)
+        entry: gitleaks git --staged --redact --no-banner
+        language: system
+        pass_filenames: false
       - id: pytest-fast
         name: pytest (fast — excludes slow integration tests)
         entry: python -m pytest -q -m "not slow"
