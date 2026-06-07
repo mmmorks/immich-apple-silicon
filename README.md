@@ -181,6 +181,40 @@ Reboot. Now `/data` on the Mac resolves to the SMB/NFS mount, matching what Dock
 
 Immich automatically rewrites all file paths in the database on restart when `IMMICH_MEDIA_LOCATION` changes. It's safe — **but back up your database first**.
 
+## ML appliance mode (remote ML endpoint for a NAS)
+
+If your Immich server runs elsewhere (e.g. a NAS) and you only want this
+Mac to provide **GPU-accelerated machine learning**, run the accelerator in
+ML appliance mode. The Mac runs only the native Metal/ANE ML service as a
+drop-in replacement for Immich's Docker ML container — no worker, no shared
+filesystem, no database access on the Mac.
+
+```bash
+immich-accelerator setup --ml-only        # optional: --port 3003 --host 0.0.0.0
+immich-accelerator start
+```
+
+Setup prints the exact line to set on your NAS:
+
+```
+IMMICH_MACHINE_LEARNING_URL=http://<mac-LAN-ip>:3003
+```
+
+Then stop your old Docker `immich-machine-learning` container. ML inference
+is pure HTTP (images in, embeddings out) — no shared storage is required.
+
+The dashboard (`http://<mac>:8420`) shows ML health, request throughput and
+latency, and real Metal GPU residency / ANE power.
+
+### Security note
+
+The ML service has **no authentication** (Immich's ML never has) and binds
+`0.0.0.0` by default, so any host on your LAN can call it. Keep it on a
+trusted network. To bind a single interface, set `"ml_host"` to that IP in
+`~/.immich-accelerator/config.json`. Real GPU/ANE metrics use `powermetrics`,
+which requires root; setup installs a scoped passwordless `sudoers` rule
+pointing at a fixed, root-owned wrapper (`uninstall` removes both).
+
 ## ML service
 
 The ML service is a managed fork of [immich-ml-metal](https://github.com/sebastianfredette/immich-ml-metal) by [@sebastianfredette](https://github.com/sebastianfredette), included as a git submodule. It replaces Immich's Docker ML container with native macOS inference. Upstream changes are reviewed before merging.
@@ -224,6 +258,7 @@ The native worker runs Immich's unmodified code. The ffmpeg and image processing
 | **ML: Face detection** | ONNX Runtime | Apple Vision framework (Neural Engine) | Different model entirely. Detection accuracy is comparable; bounding boxes may differ slightly. |
 | **ML: Face recognition** | ONNX Runtime | ONNX Runtime with CoreML | Same model, CoreML acceleration. Numerically close embeddings. |
 | **ML: OCR** | PaddleOCR via ONNX | Apple Vision framework (Neural Engine) | Different engine. Vision framework OCR is generally more accurate for Latin text, may differ for CJK. |
+| **ML appliance mode** | ML + worker on one host | ML service only; worker stays on the remote Immich host | Pure HTTP ML endpoint; no shared filesystem needed. |
 
 ### What this means in practice
 
