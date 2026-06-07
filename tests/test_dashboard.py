@@ -506,6 +506,7 @@ class TestGetStatusMl:
         with (
             patch.object(dash, "_tail_text", return_value=sample_log),
             patch.object(dash, "_count_predicts", return_value=5),
+            patch.object(dash, "_ml_health", return_value=None),
             patch.object(dash, "_ping_ml", return_value=True),
             patch("immich_accelerator.metrics.sample_powermetrics", return_value={"gpu_residency_pct": 30.0, "ane_mw": 500.0}),
             patch.object(dash, "_system_metrics", return_value={"load_1m": 1.0, "mem_total_gb": 24.0, "cpus": 10}),
@@ -529,6 +530,7 @@ class TestGetStatusMl:
 
         with (
             patch.object(dash, "_tail_text", return_value=""),
+            patch.object(dash, "_ml_health", return_value=None),
             patch.object(dash, "_ping_ml", return_value=True),
             patch("immich_accelerator.metrics.sample_powermetrics", return_value=None),
             patch.object(dash, "_system_metrics", return_value={"load_1m": 0, "mem_total_gb": 24.0, "cpus": 10}),
@@ -560,6 +562,7 @@ class TestGetStatusMl:
         with (
             patch.object(dash, "_tail_text", return_value=""),
             patch.object(dash, "_count_predicts", return_value=0),
+            patch.object(dash, "_ml_health", return_value=None),
             patch.object(dash, "_ping_ml", return_value=True),
             patch("immich_accelerator.metrics.sample_powermetrics", return_value={"gpu_residency_pct": None, "ane_mw": None}),
             patch.object(dash, "_system_metrics", return_value={"load_1m": 0, "mem_total_gb": 24.0, "cpus": 10}),
@@ -571,3 +574,93 @@ class TestGetStatusMl:
             out = dash.get_status_ml({"mode": "ml-only", "ml_host": "0.0.0.0", "ml_port": 3003, "metrics_powermetrics": True})
         assert out["hardware"]["powermetrics"] is False
         assert out["hardware"]["gpu_residency_pct"] is None
+
+    def test_health_surfaced_from_ml_health(self):
+        import immich_accelerator.dashboard as dash
+
+        health = {
+            "status": "healthy",
+            "checks": {"clip": "ok"},
+            "models": {
+                "clip": {"loaded": True, "name": "ViT-SO400M-16-SigLIP2-384__webli"},
+                "face": {"loaded": True, "name": "buffalo_l"},
+            },
+            "unload_strategy": "pressure",
+        }
+        with (
+            patch.object(dash, "_tail_text", return_value=""),
+            patch.object(dash, "_count_predicts", return_value=0),
+            patch.object(dash, "_ml_health", return_value=health),
+            patch("immich_accelerator.metrics.sample_powermetrics", return_value=None),
+            patch.object(dash, "_system_metrics", return_value={"load_1m": 0, "mem_total_gb": 24.0, "cpus": 10}),
+        ):
+            dash._ml_cache = None
+            dash._ml_cache_ts = 0
+            dash._ml_last_total = 0
+            dash._ml_last_ts = 0.0
+            out = dash.get_status_ml(self._cfg())
+        # /health answering implies liveness without a separate /ping
+        assert out["services"]["ml"]["alive"] is True
+        assert out["health"]["status"] == "healthy"
+        assert out["health"]["models"]["clip"]["name"] == "ViT-SO400M-16-SigLIP2-384__webli"
+        assert out["health"]["unload_strategy"] == "pressure"
+
+    def test_offline_when_health_and_ping_fail(self):
+        import immich_accelerator.dashboard as dash
+
+        with (
+            patch.object(dash, "_tail_text", return_value=""),
+            patch.object(dash, "_count_predicts", return_value=0),
+            patch.object(dash, "_ml_health", return_value=None),
+            patch.object(dash, "_ping_ml", return_value=False),
+            patch("immich_accelerator.metrics.sample_powermetrics", return_value=None),
+            patch.object(dash, "_system_metrics", return_value={"load_1m": 0, "mem_total_gb": 24.0, "cpus": 10}),
+        ):
+            dash._ml_cache = None
+            dash._ml_cache_ts = 0
+            dash._ml_last_total = 0
+            dash._ml_last_ts = 0.0
+            out = dash.get_status_ml(self._cfg())
+        assert out["services"]["ml"]["alive"] is False
+        assert out["ml"]["activity"] == "offline"
+        assert out["health"]["status"] == "offline"
+
+    def test_latency_by_task_and_events_present(self):
+        import immich_accelerator.dashboard as dash
+
+        log = (
+            "2026-06-06 12:00:01 - src.main - INFO -   clip: 40ms\n"
+            "2026-06-06 12:00:01 - src.main - WARNING - Falling back to HF bf16 for SigLIP2\n"
+            "2026-06-06 12:00:01 - src.main - INFO - predict: 1 task(s) [clip] completed in 41ms\n"
+        )
+        with (
+            patch.object(dash, "_tail_text", return_value=log),
+            patch.object(dash, "_count_predicts", return_value=1),
+            patch.object(dash, "_ml_health", return_value=None),
+            patch.object(dash, "_ping_ml", return_value=True),
+            patch("immich_accelerator.metrics.sample_powermetrics", return_value=None),
+            patch.object(dash, "_system_metrics", return_value={"load_1m": 0, "mem_total_gb": 24.0, "cpus": 10}),
+        ):
+            dash._ml_cache = None
+            dash._ml_cache_ts = 0
+            dash._ml_last_total = 0
+            dash._ml_last_ts = 0.0
+            out = dash.get_status_ml(self._cfg())
+        assert out["ml"]["latency_by_task"]["clip"]["samples"] == 1
+        assert out["events"]["warnings"] == 1
+        assert out["events"]["recent"][-1]["msg"].startswith("Falling back")
+
+
+class TestMemoryMetrics:
+    def test_available_memory_parses_vm_stat(self):
+        import immich_accelerator.dashboard as dash
+
+        vmstat = "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:                               100000.\nPages inactive:                            50000.\n"
+        with patch.object(dash, "_run", return_value=vmstat):
+            assert dash._available_memory_mb() == (150000 * 16384) // (1024 * 1024)
+
+    def test_available_memory_none_when_vm_stat_empty(self):
+        import immich_accelerator.dashboard as dash
+
+        with patch.object(dash, "_run", return_value=""):
+            assert dash._available_memory_mb() is None

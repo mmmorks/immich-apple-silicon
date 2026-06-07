@@ -354,6 +354,36 @@ def _ping_ml(config: dict) -> bool:
         return False
 
 
+def _ml_health(config: dict) -> dict | None:
+    """Fetch the ML service's /health JSON (model load state, degraded status).
+
+    Returns the parsed dict, or None if unreachable / not valid JSON. Short
+    timeout; never raises. /health is the fork's own endpoint (upstream Immich
+    ML has none), so depending on it here is safe.
+    """
+    import urllib.request as _urlreq
+
+    port = int(config.get("ml_port", 3003))
+    try:
+        with _urlreq.urlopen(f"http://localhost:{port}/health", timeout=3) as r:
+            data = json.loads(r.read())
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def _log_age_seconds(path: Path) -> float | None:
+    """Seconds since the ML log was last written — a proxy for recent activity.
+
+    Distinguishes a quiet-but-healthy service (old log, /ping ok) from a busy
+    one (fresh log). Returns None if the log doesn't exist yet.
+    """
+    try:
+        return max(0.0, time.time() - path.stat().st_mtime)
+    except OSError:
+        return None
+
+
 def _tail_text(path: Path, max_bytes: int = 65536) -> str:
     try:
         with open(path, "rb") as f:
@@ -380,6 +410,26 @@ def _count_predicts(path: Path) -> int:
         return 0
 
 
+def _available_memory_mb() -> int | None:
+    """Available memory in MB (free + inactive pages) via vm_stat, or None.
+
+    Mirrors the ML service's own memory check — this is the resource that drives
+    the model unload strategy, so surfacing it predicts unload thrash.
+    """
+    import re
+
+    out = _run(["vm_stat"])
+    if not out:
+        return None
+    ps = re.search(r"page size of (\d+) bytes", out)
+    page = int(ps.group(1)) if ps else 16384
+    free = re.search(r"Pages free:\s+(\d+)", out)
+    inactive = re.search(r"Pages inactive:\s+(\d+)", out)
+    if not free or not inactive:
+        return None
+    return (int(free.group(1)) + int(inactive.group(1))) * page // (1024 * 1024)
+
+
 def _system_metrics() -> dict:
     global _static_hw
     load_raw = _run(["sysctl", "-n", "vm.loadavg"])
@@ -394,30 +444,54 @@ def _system_metrics() -> dict:
             "mem_total_gb": round(int(mem_raw) / (1024**3), 1) if mem_raw else 0,
             "cpus": int(cpu_raw) if cpu_raw else 0,
         }
-    return {"load_1m": load_1m, "mem_total_gb": _static_hw["mem_total_gb"], "cpus": _static_hw["cpus"]}
+    metrics = {"load_1m": load_1m, "mem_total_gb": _static_hw["mem_total_gb"], "cpus": _static_hw["cpus"]}
+    # Available memory + used % (the unload-strategy-relevant numbers), when vm_stat is readable.
+    avail_mb = _available_memory_mb()
+    total_gb = _static_hw["mem_total_gb"]
+    if avail_mb is not None and total_gb:
+        avail_gb = round(avail_mb / 1024, 1)
+        metrics["mem_available_gb"] = avail_gb
+        metrics["mem_used_pct"] = round(max(0.0, min(1.0, (total_gb - avail_gb) / total_gb)) * 100, 1)
+    return metrics
 
 
 def get_status_ml(config: dict) -> dict:
     """ML appliance status: health, throughput, latency, real GPU/ANE."""
     global _ml_cache, _ml_cache_ts, _ml_last_total, _ml_last_ts
     from . import metrics
-    from .ml_stats import parse_ml_log
+    from .ml_stats import parse_ml_events, parse_ml_log
 
     with _status_lock:
         now = time.monotonic()
         if _ml_cache and now - _ml_cache_ts < _CACHE_TTL:
             return _ml_cache
 
-        ml_alive = _ping_ml(config)
         log_path = Path.home() / ".immich-accelerator" / "logs" / "ml.log"
-        stats = parse_ml_log(_tail_text(log_path))  # recent tail: tasks + latency
+        tail = _tail_text(log_path)  # recent tail: tasks, latency, events
+        stats = parse_ml_log(tail)
+        events = parse_ml_events(tail)
         cumulative = _count_predicts(log_path)  # monotonic full-file count
+
+        # /health gives model load state + degraded status, and implies liveness,
+        # so only fall back to a bare /ping if it didn't answer.
+        health = _ml_health(config)
+        ml_alive = health is not None or _ping_ml(config)
 
         rate = 0.0
         if _ml_last_ts and now > _ml_last_ts and cumulative >= _ml_last_total:
             rate = (cumulative - _ml_last_total) / (now - _ml_last_ts)
         _ml_last_total = cumulative
         _ml_last_ts = now
+
+        # Distinguish "active" (fresh log) from "idle" (responding but quiet) and
+        # "offline" (not responding) — all three otherwise read as 0 req/s.
+        log_age = _log_age_seconds(log_path)
+        if not ml_alive:
+            activity = "offline"
+        elif log_age is not None and log_age < 15:
+            activity = "active"
+        else:
+            activity = "idle"
 
         pm = metrics.sample_powermetrics() if config.get("metrics_powermetrics") else None
 
@@ -428,9 +502,19 @@ def get_status_ml(config: dict) -> dict:
                 "throughput_rps": round(rate, 2),
                 "tasks": stats["tasks"],
                 "latency_ms": stats["latency_ms"],
+                "latency_by_task": stats["latency_by_task"],
                 "total_predicts": cumulative,
                 "endpoint": f"http://{config.get('ml_host', '0.0.0.0')}:{config.get('ml_port', 3003)}",
+                "activity": activity,
+                "last_activity_age_s": round(log_age, 1) if log_age is not None else None,
             },
+            "health": {
+                "status": (health or {}).get("status", "unknown" if ml_alive else "offline"),
+                "checks": (health or {}).get("checks", {}),
+                "models": (health or {}).get("models"),
+                "unload_strategy": (health or {}).get("unload_strategy"),
+            },
+            "events": events,
             "hardware": {
                 "gpu_residency_pct": pm.get("gpu_residency_pct") if pm else None,
                 "ane_mw": pm.get("ane_mw") if pm else None,
