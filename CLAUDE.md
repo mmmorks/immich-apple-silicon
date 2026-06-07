@@ -149,7 +149,7 @@ bd close <id>         # Complete work
 - Run `bd prime` for detailed command reference and session close protocol
 - Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
 
-**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
+**Architecture in one line:** `bd` data lives in a shared Dolt sql-server (machine-wide; see global `~/.claude/CLAUDE.md`), NOT a per-repo embedded DB. The `ml-*` issues live in the shared *planning* DB hydrated as an additional repo — not this repo's `.beads` — so `bd export`/`bd stats` run here can report 0; use `bd list`. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md.
 
 ## Agent Context Profiles
 
