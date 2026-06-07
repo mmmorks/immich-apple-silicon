@@ -33,7 +33,7 @@ def parse_ml_log(text: str) -> dict:
         lowered = names.lower()
         if "clip" in lowered:
             tasks["clip"] += 1
-        if "face" in lowered:
+        if "fac" in lowered:
             tasks["faces"] += 1
         if "ocr" in lowered:
             tasks["ocr"] += 1

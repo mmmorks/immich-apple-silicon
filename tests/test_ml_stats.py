@@ -28,6 +28,10 @@ class TestParseMlLog:
         assert lat["max"] == 142.0
         assert lat["samples"] == 4
 
+    def test_facial_recognition_variant_buckets_to_faces(self):
+        log = "predict: 1 task(s) [facial-recognition] completed in 30ms\n"
+        assert parse_ml_log(log)["tasks"]["faces"] == 1
+
     def test_empty_log_is_safe(self):
         result = parse_ml_log("")
         assert result["total"] == 0
