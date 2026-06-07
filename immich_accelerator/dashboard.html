@@ -280,7 +280,7 @@
     <div class="service"><div class="dot"></div><div class="service-label" style="color:var(--text-muted)">Docker (API)</div></div>
   </div>
 
-  <div class="section" style="display:flex; justify-content:space-between; align-items:center;">
+  <div class="section full-only" style="display:flex; justify-content:space-between; align-items:center;">
     <span>Apple Silicon</span>
     <button id="requeue-btn" style="
       background: var(--card); border: 1px solid var(--card-border);
@@ -291,11 +291,29 @@
        onmouseout="this.style.borderColor='var(--card-border)'; this.style.color='var(--text-dim)'"
     >Re-queue Missing ↻</button>
   </div>
+  <div class="section ml-only-section" id="ml-section-header" style="display:none;">ML Appliance</div>
+  <div class="chip-grid" id="ml-info-cards" style="display:none; margin-bottom:10px;">
+    <div class="chip-card" style="grid-column: span 2;">
+      <div class="chip-header" style="color:var(--accent)">ML Service</div>
+      <div class="task-row">
+        <div class="task-top">
+          <div class="task-label">Status</div>
+          <div class="task-pct" id="ml-health" style="color:var(--text-muted)">—</div>
+        </div>
+        <div class="task-stats" style="flex-direction:column; align-items:flex-start; gap:4px;">
+          <span>Endpoint: <span class="v" id="ml-endpoint" style="color:var(--text-dim)">—</span></span>
+          <span>Throughput: <span class="v" id="ml-throughput" style="color:var(--text-dim)">—</span></span>
+          <span>Latency: <span class="v" id="ml-latency" style="color:var(--text-dim)">—</span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="section ml-only-section" id="ml-silicon-header" style="display:none;">Apple Silicon</div>
   <div class="chip-grid" id="chips">
-    <div class="chip-card"><div class="chip-header cpu">CPU (NEON)</div><div class="task-row"><div class="task-top"><div class="task-label">Thumbnails</div><div class="task-pct" style="color:var(--text-muted)">—</div></div><div class="bar-bg"><div class="bar-fill cpu" style="width:0"></div></div><div class="task-stats"><span style="color:var(--text-muted)">loading</span></div></div></div>
-    <div class="chip-card"><div class="chip-header gpu">Metal GPU</div><div class="task-row"><div class="task-top"><div class="task-label">CLIP Embeddings</div><div class="task-pct" style="color:var(--text-muted)">—</div></div><div class="bar-bg"><div class="bar-fill gpu" style="width:0"></div></div><div class="task-stats"><span style="color:var(--text-muted)">loading</span></div></div></div>
-    <div class="chip-card"><div class="chip-header ane">Neural Engine</div><div class="task-row"><div class="task-top"><div class="task-label">Face Detection · OCR</div><div class="task-pct" style="color:var(--text-muted)">—</div></div><div class="bar-bg"><div class="bar-fill ane" style="width:0"></div></div><div class="task-stats"><span style="color:var(--text-muted)">loading</span></div></div></div>
-    <div class="chip-card"><div class="chip-header vtb">VideoToolbox</div><div class="task-row"><div class="task-top"><div class="task-label">Video Transcode</div><div class="task-pct" style="color:var(--text-muted)">—</div></div><div class="bar-bg"><div class="bar-fill vtb" style="width:0"></div></div><div class="task-stats"><span style="color:var(--text-muted)">loading</span></div></div></div>
+    <div class="chip-card full-only"><div class="chip-header cpu">CPU (NEON)</div><div class="task-row"><div class="task-top"><div class="task-label">Thumbnails</div><div class="task-pct" style="color:var(--text-muted)">—</div></div><div class="bar-bg"><div class="bar-fill cpu" style="width:0"></div></div><div class="task-stats"><span style="color:var(--text-muted)">loading</span></div></div></div>
+    <div class="chip-card" id="gpu-card"><div class="chip-header gpu">Metal GPU</div><div class="task-row"><div class="task-top"><div class="task-label">CLIP Embeddings</div><div class="task-pct" id="gpu-pct" style="color:var(--text-muted)">—</div></div><div class="bar-bg"><div class="bar-fill gpu" style="width:0"></div></div><div class="task-stats"><span id="gpu-stat" style="color:var(--text-muted)">loading</span></div></div></div>
+    <div class="chip-card" id="ane-card"><div class="chip-header ane">Neural Engine</div><div class="task-row"><div class="task-top"><div class="task-label">Face Detection · OCR</div><div class="task-pct" id="ane-pct" style="color:var(--text-muted)">—</div></div><div class="bar-bg"><div class="bar-fill ane" style="width:0"></div></div><div class="task-stats"><span id="ane-stat" style="color:var(--text-muted)">loading</span></div></div></div>
+    <div class="chip-card full-only"><div class="chip-header vtb">VideoToolbox</div><div class="task-row"><div class="task-top"><div class="task-label">Video Transcode</div><div class="task-pct" style="color:var(--text-muted)">—</div></div><div class="bar-bg"><div class="bar-fill vtb" style="width:0"></div></div><div class="task-stats"><span style="color:var(--text-muted)">loading</span></div></div></div>
   </div>
 
   <div class="sys" id="sys">
@@ -518,10 +536,82 @@ function render(d) {
   }
 }
 
+// --- ml-only helpers ---
+function setText(id, v) { const e = document.getElementById(id); if (e) e.textContent = v; }
+function setBar(cls, pct) {
+  const e = document.querySelector('.bar-fill.' + cls);
+  if (e) e.style.width = Math.max(0, Math.min(100, pct)) + '%';
+}
+
+function renderMl(data) {
+  // Hide full-mode-only elements (requeue section header, CPU/VTB chip cards)
+  document.querySelectorAll('.full-only').forEach(function(el) { el.style.display = 'none'; });
+  // Show ml-only section headers and info cards
+  document.querySelectorAll('.ml-only-section').forEach(function(el) { el.style.display = ''; });
+  document.getElementById('ml-info-cards').style.display = '';
+  document.getElementById('ml-section-header').style.display = '';
+  document.getElementById('ml-silicon-header').style.display = '';
+
+  const ml = data.ml || {};
+  const hw = data.hardware || {};
+  const lat = ml.latency_ms || {};
+
+  // Service health
+  const alive = data.services && data.services.ml && data.services.ml.alive;
+  setText('ml-health', alive ? 'online' : 'offline');
+  setText('ml-endpoint', ml.endpoint || '');
+  setText('ml-throughput', (ml.throughput_rps != null ? ml.throughput_rps : 0).toFixed(2) + ' req/s');
+  setText('ml-latency', 'p50 ' + (lat.p50 != null ? lat.p50 : 0) + 'ms · max ' + (lat.max != null ? lat.max : 0) + 'ms');
+
+  // GPU chip card: real residency %
+  const gpuPct = hw.gpu_residency_pct;
+  setBar('gpu', gpuPct == null ? 0 : gpuPct);
+  setText('gpu-pct', gpuPct == null ? '—' : gpuPct.toFixed(1) + '%');
+  setText('gpu-stat', gpuPct == null
+    ? 'powermetrics unavailable'
+    : gpuPct.toFixed(1) + '% · CLIP ' + (ml.tasks ? ml.tasks.clip || 0 : 0));
+
+  // ANE chip card: power mW (no utilisation %; normalise bar to 8 W max as visual only)
+  const aneMw = hw.ane_mw;
+  setBar('ane', aneMw == null ? 0 : Math.min(100, aneMw / 80));
+  setText('ane-pct', aneMw == null ? '—' : aneMw.toFixed(0) + ' mW');
+  setText('ane-stat', aneMw == null
+    ? 'powermetrics unavailable'
+    : aneMw.toFixed(0) + ' mW · faces ' + (ml.tasks ? ml.tasks.faces || 0 : 0) + ' · ocr ' + (ml.tasks ? ml.tasks.ocr || 0 : 0));
+
+  // Versions + system (shared with full mode)
+  const accVer = 'v' + (data.accelerator_version || '?');
+  document.getElementById('acc-ver').textContent = accVer;
+  document.getElementById('footer-ver').textContent = accVer;
+  setText('ver', data.version || '—');
+
+  const sys = data.system || {};
+  const sysEl = document.getElementById('sys');
+  if (sysEl) {
+    sysEl.textContent = '';
+    const items = [
+      ['Load', sys.load_1m != null ? sys.load_1m.toFixed(1) : '—'],
+      ['CPUs', sys.cpus != null ? String(sys.cpus) : '—'],
+      ['Memory', sys.mem_total_gb != null ? sys.mem_total_gb + ' GB' : '—'],
+      ['Updated', new Date().toLocaleTimeString()],
+    ];
+    for (const [label, val] of items) {
+      const span = document.createElement('span');
+      span.textContent = label + ' ';
+      const v = document.createElement('span');
+      v.className = 'v';
+      v.textContent = val;
+      span.appendChild(v);
+      sysEl.appendChild(span);
+    }
+  }
+}
+
 async function refresh() {
   try {
     const r = await fetch('/api/status');
     const d = await r.json();
+    if (d.mode === 'ml-only') { renderMl(d); return; }
     render(d);
   } catch(e) {
     console.error('Refresh:', e);
