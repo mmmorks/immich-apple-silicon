@@ -5,7 +5,21 @@ on:
     branches: [main]
   push:
     branches: [main]
+  # Manual trigger — previously the only way to kick a run was to push an empty
+  # commit. Also drives the heavy nightly tier on demand.
+  workflow_dispatch:
+  schedule:
+    # 09:00 UTC daily. Gives a daily fidelity signal even on days with no
+    # merges, and is when the heavy jobs (gated below) run unattended.
+    - cron: "0 9 * * *"
 
+# CI tiers:
+#   Per-PR (fast gate): lint, secrets-scan, ml-tests. Run on every event,
+#     including pull_request — keeps PR feedback quick.
+#   Heavy (fresh-install-macos, fresh-install-docker): skipped on pull_request
+#     to keep PR latency low. Still run on push to main (so they gate releases
+#     via auto-tag), on the nightly schedule, and on manual dispatch. Future
+#     real-weight parity / self-hosted Vision jobs belong on this tier too.
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -60,6 +74,11 @@ jobs:
     # blocks a release, trigger `update-homebrew.yml` manually via
     # `gh workflow run update-homebrew.yml -f tag=vX.Y.Z` — that
     # workflow bypasses CI entirely.
+    #
+    # Heavy tier: skipped on pull_request to keep PR latency low. Runs on push
+    # to main (gates releases via auto-tag), the nightly schedule, and manual
+    # dispatch.
+    if: github.event_name != 'pull_request'
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v5
@@ -113,6 +132,11 @@ jobs:
     # Docker E2E: generates compose from template, starts the full
     # Immich stack, validates API + detection. Runs on Ubuntu where
     # Docker is pre-installed (macOS runners can't run Docker VMs).
+    #
+    # Heavy tier: skipped on pull_request to keep PR latency low. Runs on push
+    # to main (gates releases via auto-tag), the nightly schedule, and manual
+    # dispatch.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
