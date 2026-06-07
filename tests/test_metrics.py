@@ -19,6 +19,12 @@ class TestParsePowermetrics:
     def test_extracts_gpu_residency(self):
         assert metrics.parse_powermetrics(SAMPLE_PM)["gpu_residency_pct"] == 37.5
 
+    def test_extracts_gpu_residency_hw_label(self):
+        assert metrics.parse_powermetrics("GPU HW active residency:  37.50%")["gpu_residency_pct"] == 37.5
+
+    def test_extracts_gpu_residency_plain_label(self):
+        assert metrics.parse_powermetrics("GPU active residency:  41.0%")["gpu_residency_pct"] == 41.0
+
     def test_extracts_ane_power(self):
         assert metrics.parse_powermetrics(SAMPLE_PM)["ane_mw"] == 980.0
 
@@ -39,3 +45,6 @@ class TestSudoersContent:
         # sudoers grant cannot be abused with arbitrary args.
         assert "powermetrics" in metrics.WRAPPER_CONTENT
         assert metrics.WRAPPER_CONTENT.startswith("#!/bin/sh")
+        assert "$@" not in metrics.WRAPPER_CONTENT
+        assert "$*" not in metrics.WRAPPER_CONTENT
+        assert "$1" not in metrics.WRAPPER_CONTENT
