@@ -15,6 +15,54 @@
   a change back, open a PR against upstream (`gh pr create --repo epheterson/<repo>`); never push
   to `upstream` directly.
 
+## Working in a git worktree
+
+We sometimes start a session inside an isolated worktree (launched with `claude -w`).
+The worktree branch is a **scratch copy of `main`** — commits land on `origin/main`
+directly; the branch never gets its own `origin/<branch>` upstream.
+
+**Detect it at session start.** You are in a linked worktree (not the primary checkout) when:
+
+```bash
+[ "$(git rev-parse --git-dir)" != "$(git rev-parse --git-common-dir)" ] \
+  && ! git rev-parse --show-superproject-working-tree 2>/dev/null | grep -q .
+# true ⇒ linked worktree; the superproject check excludes false positives inside the ml submodule
+```
+
+When that holds, follow this flow (otherwise use the normal `main` checkout flow above):
+
+1. **Initialize the submodule — required first step.** `git worktree add` does **not**
+   populate submodules, so `ml/` starts empty and any build/test touching it fails
+   confusingly. Run once at session start:
+
+   ```bash
+   git submodule update --init --recursive   # populates ml/ in this worktree
+   git fetch origin main && git rebase origin/main   # start from the current tip of main
+   ```
+
+   The `ml` submodule shares its object store with the primary checkout, so this is cheap.
+
+2. **Mid-session: commit locally, do not push.** The branch has no upstream and we don't
+   want one. The `ml`-pointer-bump rule from the Git workflow above still applies: commit
+   inside `ml`, then `git add ml && git commit` in the parent.
+
+3. **When committing/pushing (per the active profile or when asked): push to `main`, then
+   re-sync the worktree.** If you changed `ml`, push the submodule first so the pointer the
+   parent records is reachable on the `ml` remote:
+
+   ```bash
+   # only if ml changed:
+   git -C ml push origin HEAD:main
+
+   # parent: land the worktree's commits on main, then bring the branch back in sync
+   git fetch origin main && git rebase origin/main
+   git push origin HEAD:main
+   git fetch origin main && git rebase origin/main   # worktree HEAD now == origin/main
+   ```
+
+   Resolve any conflicts in the rebase; **never force-push to `main`**. After this the
+   worktree branch and `origin/main` match — the worktree is back in sync.
+
 ## Code style
 
 - Python: type hints, f-strings, pathlib for paths.
