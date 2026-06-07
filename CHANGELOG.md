@@ -4,6 +4,7 @@
 
 ### Internal
 - **Static-analysis stack.** Added [ruff](https://docs.astral.sh/ruff/) linting + formatting and [pyright](https://github.com/microsoft/pyright) type-checking for the CLI (`pyproject.toml`), plus gitleaks secret scanning, Dependabot, and pre-commit hooks; all wired into CI. The `ml/` submodule gets the same ruff config and pre-commit/Dependabot setup (its pyright + tests stay local, since they need the native mlx/cv2 venv). No user-facing behavior change.
+- **Face-embedding parity verified — no face re-scan on migration.** Added a parity harness (`ml/scripts/face_embedding_parity.py`) that compares the fork's Apple-Vision face landmarks against upstream's SCRFD keypoints through the *identical* ArcFace recognizer + alignment. On an LFW sample the same face's embedding drifts by a median cosine ~0.98 with no top-1 identity-retrieval loss, so a Docker-built face index and its clusters stay compatible — migrating to the native worker does **not** require re-running face recognition. Documented in the README "Known differences" table; no behavior change.
 
 ## 1.5.3 — 2026-06-03
 
