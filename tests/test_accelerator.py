@@ -920,3 +920,53 @@ class TestLanIp:
         with patch("immich_accelerator.__main__.subprocess.run",
                    return_value=MagicMock(returncode=1, stdout="")):
             assert _detect_lan_ip() is None
+
+
+class TestSetupMlOnly:
+    def test_writes_minimal_ml_only_config(self, tmp_data_dir):
+        from immich_accelerator.__main__ import _setup_ml_only, load_config
+
+        args = argparse.Namespace(ml_only=True, port=3003, host="0.0.0.0",
+                                  url=None, api_key=None, manual=False,
+                                  import_server=None)
+        with patch("immich_accelerator.__main__._find_ml_dir",
+                   return_value=Path("/Users/test/ml")), \
+             patch("immich_accelerator.__main__._install_powermetrics_sudoers",
+                   return_value=True), \
+             patch("immich_accelerator.__main__._print_nas_wiring"):
+            _setup_ml_only(args)
+
+        cfg = load_config()
+        assert cfg["mode"] == "ml-only"
+        assert cfg["ml_dir"] == "/Users/test/ml"
+        assert cfg["ml_host"] == "0.0.0.0"
+        assert cfg["ml_port"] == 3003
+        assert cfg["metrics_powermetrics"] is True
+        # appliance config must NOT carry worker/db keys
+        for k in ("db_password", "redis_port", "server_dir", "upload_mount"):
+            assert k not in cfg
+
+    def test_disables_metrics_when_sudoers_fails(self, tmp_data_dir):
+        from immich_accelerator.__main__ import _setup_ml_only, load_config
+
+        args = argparse.Namespace(ml_only=True, port=3003, host="0.0.0.0",
+                                  url=None, api_key=None, manual=False,
+                                  import_server=None)
+        with patch("immich_accelerator.__main__._find_ml_dir",
+                   return_value=Path("/Users/test/ml")), \
+             patch("immich_accelerator.__main__._install_powermetrics_sudoers",
+                   return_value=False), \
+             patch("immich_accelerator.__main__._print_nas_wiring"):
+            _setup_ml_only(args)
+
+        assert load_config()["metrics_powermetrics"] is False
+
+    def test_cmd_setup_dispatches_to_ml_only(self, tmp_data_dir):
+        from immich_accelerator.__main__ import cmd_setup
+
+        args = argparse.Namespace(ml_only=True, port=3003, host="0.0.0.0",
+                                  url=None, api_key=None, manual=False,
+                                  import_server=None)
+        with patch("immich_accelerator.__main__._setup_ml_only") as m:
+            cmd_setup(args)
+        m.assert_called_once_with(args)

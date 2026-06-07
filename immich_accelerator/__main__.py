@@ -2742,6 +2742,8 @@ def _setup_manual(_args):
 
 def cmd_setup(args):
     """Set up the accelerator. Dispatches to local, remote, or manual mode."""
+    if getattr(args, "ml_only", False):
+        return _setup_ml_only(args)
     if args.manual:
         _setup_manual(args)
     elif args.import_server and not args.url:
@@ -2867,6 +2869,37 @@ def _find_ml_dir() -> Path | None:
 
     log.info("  ML service ready")
     return ml_dir
+
+
+def _setup_ml_only(args) -> None:
+    """Configure ML appliance mode: native Metal ML service as a remote
+    ML endpoint. No Docker / DB / worker / shared filesystem."""
+    ml_dir = _find_ml_dir()
+    if not ml_dir:
+        raise RuntimeError(
+            "ML service unavailable — cannot set up ml-only mode. "
+            "Ensure Python 3.11+ and the ml/ submodule are present."
+        )
+    config = {
+        "mode": "ml-only",
+        "ml_dir": str(ml_dir),
+        "ml_host": getattr(args, "host", None) or "0.0.0.0",
+        "ml_port": int(getattr(args, "port", None) or 3003),
+        "metrics_powermetrics": True,
+        "dashboard_port": 8420,
+    }
+    save_config(config)
+    log.info("Wrote ml-only config to %s", CONFIG_FILE)
+
+    if _install_powermetrics_sudoers():
+        log.info("Real GPU/ANE metrics enabled (powermetrics).")
+    else:
+        config["metrics_powermetrics"] = False
+        save_config(config)
+        log.warning("Continuing without real GPU/ANE metrics.")
+
+    _print_nas_wiring(config["ml_port"])
+    log.info("Setup complete. Start with: immich-accelerator start")
 
 
 def _install_powermetrics_sudoers() -> bool:
@@ -3889,6 +3922,12 @@ def main():
         metavar="DIR",
         help="Import server from extracted directory or tarball",
     )
+    setup_p.add_argument("--ml-only", dest="ml_only", action="store_true",
+                         help="Set up ML appliance mode (Metal ML endpoint only)")
+    setup_p.add_argument("--port", type=int, default=3003,
+                         help="ML service port (ml-only mode)")
+    setup_p.add_argument("--host", default="0.0.0.0",
+                         help="ML service bind host (ml-only mode)")
     start_p = sub.add_parser("start", help="Start native worker + ML")
     start_p.add_argument("--force", action="store_true", help="Restart if running")
     sub.add_parser("stop", help="Stop native services")
