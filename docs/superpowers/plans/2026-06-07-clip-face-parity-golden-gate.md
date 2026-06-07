@@ -1251,7 +1251,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 - Modify: `README.md` (ml submodule)
 - Modify (parent repo): submodule pointer
 
-- [ ] **Step 1: Document the gate in the ml README**
+- [x] **Step 1: Document the gate in the ml README**
 
 Add a short subsection near the existing parity sections (after "CLIP parity"
 / "Parity-or-fail") describing the automated gate: what it checks (SigLIP2 +
@@ -1262,7 +1262,7 @@ fixtures/goldens live (`tests/fixtures/`), how to regenerate
 Note that the default `pytest` run skips it (hermetic), and CI sets
 `ML_RUN_PARITY=1`.
 
-- [ ] **Step 2: Commit the README**
+- [x] **Step 2: Commit the README**
 
 ```bash
 git add README.md
@@ -1271,7 +1271,7 @@ git commit -m "docs(parity): document the automated golden-reference parity gate
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ```
 
-- [ ] **Step 3: Bump the parent submodule pointer**
+- [x] **Step 3: Bump the parent submodule pointer**
 
 From the **parent worktree root** (not `ml/`):
 ```bash
