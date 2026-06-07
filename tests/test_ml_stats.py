@@ -37,3 +37,12 @@ class TestParseMlLog:
         assert result["total"] == 0
         assert result["tasks"] == {"clip": 0, "faces": 0, "ocr": 0}
         assert result["latency_ms"] == {"p50": 0.0, "max": 0.0, "samples": 0}
+
+    def test_count_predict_lines(self):
+        from immich_accelerator.ml_stats import count_predict_lines
+        lines = [
+            "predict: 1 task(s) [clip] completed in 10ms\n",
+            "GET /predict\n",
+            "predict: 2 task(s) [faces+ocr] completed in 20ms\n",
+        ]
+        assert count_predict_lines(lines) == 2

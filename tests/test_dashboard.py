@@ -436,21 +436,42 @@ class TestGetStatusMl:
         import immich_accelerator.dashboard as dash
         sample_log = "predict: 1 task(s) [clip] completed in 40ms\n"
         with patch.object(dash, "_tail_text", return_value=sample_log), \
+             patch.object(dash, "_count_predicts", return_value=5), \
              patch.object(dash, "_ping_ml", return_value=True), \
              patch("immich_accelerator.metrics.sample_powermetrics",
                    return_value={"gpu_residency_pct": 30.0, "ane_mw": 500.0}), \
              patch.object(dash, "_system_metrics",
                           return_value={"load_1m": 1.0, "mem_total_gb": 24.0, "cpus": 10}):
-            # bypass the ml-cache so the body runs
             dash._ml_cache = None
             dash._ml_cache_ts = 0
+            dash._ml_last_total = 0
+            dash._ml_last_ts = 0.0
             out = dash.get_status_ml(self._cfg())
         assert out["mode"] == "ml-only"
         assert out["services"]["ml"]["alive"] is True
         assert out["ml"]["tasks"] == {"clip": 1, "faces": 0, "ocr": 0}
+        assert out["ml"]["total_predicts"] == 5
+        assert out["ml"]["throughput_rps"] == 0.0  # first call: no baseline
         assert out["hardware"]["gpu_residency_pct"] == 30.0
         assert out["hardware"]["ane_mw"] == 500.0
         assert out["hardware"]["powermetrics"] is True
+
+    def test_throughput_delta(self):
+        import immich_accelerator.dashboard as dash
+        with patch.object(dash, "_tail_text", return_value=""), \
+             patch.object(dash, "_ping_ml", return_value=True), \
+             patch("immich_accelerator.metrics.sample_powermetrics", return_value=None), \
+             patch.object(dash, "_system_metrics",
+                          return_value={"load_1m": 0, "mem_total_gb": 24.0, "cpus": 10}), \
+             patch.object(dash, "_count_predicts", return_value=30), \
+             patch("immich_accelerator.dashboard.time.monotonic", return_value=105.0):
+            dash._ml_cache = None
+            dash._ml_cache_ts = 0
+            dash._ml_last_total = 10
+            dash._ml_last_ts = 100.0
+            out = dash.get_status_ml(self._cfg())
+        # 20 predicts over 5s = 4.0 req/s
+        assert out["ml"]["throughput_rps"] == 4.0
 
     def test_full_status_carries_mode_field(self, ):
         import immich_accelerator.dashboard as dash

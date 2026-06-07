@@ -46,3 +46,12 @@ def parse_ml_log(text: str) -> dict:
     else:
         latency_ms = {"p50": 0.0, "max": 0.0, "samples": 0}
     return {"total": total, "tasks": tasks, "latency_ms": latency_ms}
+
+
+def count_predict_lines(lines) -> int:
+    """Count predict-completion lines in an iterable of log lines.
+
+    Used to derive a cumulative, monotonic predict count by streaming the
+    whole log file — the windowed ``parse_ml_log`` total is NOT cumulative.
+    """
+    return sum(1 for line in lines if _PREDICT_RE.search(line))

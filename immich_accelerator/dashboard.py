@@ -372,7 +372,22 @@ def _tail_text(path: Path, max_bytes: int = 65536) -> str:
         return ""
 
 
+def _count_predicts(path: Path) -> int:
+    """Cumulative count of predict-completion lines across the whole log.
+
+    Whole-file scan, but only runs on a dashboard cache-miss (every
+    _CACHE_TTL). Needed because the tail window count is not monotonic.
+    """
+    from .ml_stats import count_predict_lines
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            return count_predict_lines(f)
+    except OSError:
+        return 0
+
+
 def _system_metrics() -> dict:
+    global _static_hw
     load_raw = _run(["sysctl", "-n", "vm.loadavg"])
     load_1m = 0.0
     if load_raw:
@@ -380,13 +395,14 @@ def _system_metrics() -> dict:
             load_1m = float(load_raw.strip("{ }").split()[0])
         except (ValueError, IndexError):
             pass
-    mem_raw = _run(["sysctl", "-n", "hw.memsize"])
-    cpu_raw = _run(["sysctl", "-n", "hw.ncpu"])
-    return {
-        "load_1m": load_1m,
-        "mem_total_gb": round(int(mem_raw) / (1024**3), 1) if mem_raw else 0,
-        "cpus": int(cpu_raw) if cpu_raw else 0,
-    }
+    if _static_hw is None:
+        mem_raw = _run(["sysctl", "-n", "hw.memsize"])
+        cpu_raw = _run(["sysctl", "-n", "hw.ncpu"])
+        _static_hw = {
+            "mem_total_gb": round(int(mem_raw) / (1024**3), 1) if mem_raw else 0,
+            "cpus": int(cpu_raw) if cpu_raw else 0,
+        }
+    return {"load_1m": load_1m, "mem_total_gb": _static_hw["mem_total_gb"], "cpus": _static_hw["cpus"]}
 
 
 def get_status_ml(config: dict) -> dict:
@@ -401,12 +417,13 @@ def get_status_ml(config: dict) -> dict:
 
     ml_alive = _ping_ml(config)
     log_path = Path.home() / ".immich-accelerator" / "logs" / "ml.log"
-    stats = parse_ml_log(_tail_text(log_path))
+    stats = parse_ml_log(_tail_text(log_path))   # recent tail: tasks + latency
+    cumulative = _count_predicts(log_path)        # monotonic full-file count
 
     rate = 0.0
-    if _ml_last_ts and now > _ml_last_ts:
-        rate = max(0.0, (stats["total"] - _ml_last_total) / (now - _ml_last_ts))
-    _ml_last_total = stats["total"]
+    if _ml_last_ts and now > _ml_last_ts and cumulative >= _ml_last_total:
+        rate = (cumulative - _ml_last_total) / (now - _ml_last_ts)
+    _ml_last_total = cumulative
     _ml_last_ts = now
 
     pm = metrics.sample_powermetrics() if config.get("metrics_powermetrics") else None
@@ -418,7 +435,7 @@ def get_status_ml(config: dict) -> dict:
             "throughput_rps": round(rate, 2),
             "tasks": stats["tasks"],
             "latency_ms": stats["latency_ms"],
-            "total_predicts": stats["total"],
+            "total_predicts": cumulative,
             "endpoint": f"http://{config.get('ml_host', '0.0.0.0')}:{config.get('ml_port', 3003)}",
         },
         "hardware": {
@@ -427,7 +444,7 @@ def get_status_ml(config: dict) -> dict:
             "powermetrics": bool(pm),
         },
         "system": _system_metrics(),
-        "version": "—",
+        "version": config.get("version", "—"),
         "accelerator_version": _get_accelerator_version(),
     }
     _ml_cache = status
