@@ -311,6 +311,7 @@ Fixed in v1.4.1. The OCI image extractor used to skip small layers that containe
 - Postgres exposed on `127.0.0.1:5432` (localhost only) by default
 - Redis exposed on `127.0.0.1:6379` (localhost only) by default
 - Dashboard binds on `0.0.0.0:8420` (LAN-accessible) — the Re-queue button triggers job processing via the Immich API. If you're on an untrusted network, don't run the dashboard or bind to localhost only
+- Contributors: run `./scripts/setup-git-hooks.sh` to install the local pre-commit hooks, including a [gitleaks](https://github.com/gitleaks/gitleaks) secret scan that blocks committing credentials before they reach the remote (see [CONTRIBUTING.md](CONTRIBUTING.md))
 
 ## On agentic engineering
 

@@ -1,5 +1,5 @@
 # Pre-commit gate for the parent repo (the immich-accelerator CLI).
-# Install once with: pre-commit install
+# Install once with: ./scripts/setup-git-hooks.sh  (or: pre-commit install)
 # Mirrors the CI `lint` job: ruff lint + ruff format + the fast pytest suite,
 # plus a gitleaks secret scan.
 #
