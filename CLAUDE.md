@@ -26,8 +26,6 @@
 
   Only `checkout -B main origin/main` *after* any local `ml` commits are pushed (step 3),
   or you'll move the branch off unpushed work.
-- Version bump + CHANGELOG entry required for every release to main.
-- Tag releases as `vX.Y.Z` matching the VERSION file.
 - Each fork has an `upstream` remote pointing at the original `epheterson/*` repo. To contribute
   a change back, open a PR against upstream (`gh pr create --repo epheterson/<repo>`); never push
   to `upstream` directly.
