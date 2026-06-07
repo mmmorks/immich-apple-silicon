@@ -1056,10 +1056,10 @@ class TestMlOnlyCommands:
         assert "ml-only" in text
         assert "3003" in text
 
-    def test_logs_defaults_to_ml_in_ml_only(self, tmp_data_dir):
-        from immich_accelerator.__main__ import cmd_logs, save_config, LOG_DIR
+    def test_logs_defaults_to_ml_in_ml_only(self, tmp_data_dir, capsys):
+        from immich_accelerator.__main__ import cmd_logs, save_config
         save_config({"mode": "ml-only", "ml_port": 3003})
-        # no ml.log present -> prints "No log file" and returns (no exec)
         with patch("immich_accelerator.__main__.os.execvp") as ex:
             cmd_logs(argparse.Namespace(service=None))
         ex.assert_not_called()
+        assert "ml.log" in capsys.readouterr().out

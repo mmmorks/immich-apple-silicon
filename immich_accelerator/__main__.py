@@ -3474,7 +3474,9 @@ def cmd_status(_args):
 
 
 def cmd_logs(args):
-    default = "ml" if (CONFIG_FILE.exists() and load_config().get("mode") == "ml-only") else "worker"
+    default = "worker"
+    if args.service is None and CONFIG_FILE.exists() and load_config().get("mode") == "ml-only":
+        default = "ml"
     target = args.service or default
     log_file = LOG_DIR / f"{target}.log"
     if not log_file.exists():
@@ -3529,7 +3531,7 @@ def _watch_ml_only() -> None:
     config = load_config()
     if not read_pid("ml"):
         log.info("ML not running, starting...")
-        cmd_start(argparse.Namespace(force=True))
+        _start_ml_only(config, argparse.Namespace(force=True))
     _ensure_dashboard_running(config)
     while True:
         try:
@@ -3552,7 +3554,7 @@ def cmd_watch(_args):
 
     Suitable for launchd KeepAlive — runs forever, checking every 30s.
     """
-    if load_config().get("mode") == "ml-only":
+    if CONFIG_FILE.exists() and load_config().get("mode") == "ml-only":
         return _watch_ml_only()
 
     log.info("Watching services (Ctrl+C to stop)...")
