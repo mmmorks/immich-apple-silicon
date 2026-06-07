@@ -48,3 +48,26 @@ class TestSudoersContent:
         assert "$@" not in metrics.WRAPPER_CONTENT
         assert "$*" not in metrics.WRAPPER_CONTENT
         assert "$1" not in metrics.WRAPPER_CONTENT
+
+
+from unittest.mock import MagicMock, patch
+
+
+class TestSamplePowermetrics:
+    def test_invokes_wrapper_via_sudo_n(self):
+        proc = MagicMock(returncode=0, stdout=SAMPLE_PM)
+        with patch("immich_accelerator.metrics.subprocess.run", return_value=proc) as run:
+            result = metrics.sample_powermetrics()
+        cmd = run.call_args[0][0]
+        assert cmd[:2] == ["sudo", "-n"]
+        assert cmd[2] == str(metrics.POWERMETRICS_WRAPPER)
+        assert result["gpu_residency_pct"] == 37.5
+
+    def test_nonzero_return_yields_none(self):
+        proc = MagicMock(returncode=1, stdout="")
+        with patch("immich_accelerator.metrics.subprocess.run", return_value=proc):
+            assert metrics.sample_powermetrics() is None
+
+    def test_oserror_yields_none(self):
+        with patch("immich_accelerator.metrics.subprocess.run", side_effect=OSError):
+            assert metrics.sample_powermetrics() is None
