@@ -421,6 +421,41 @@ class TestFastAPIApp:
             for v in data.values():
                 assert v == "failed"
 
+    def test_status_does_not_block_event_loop(self, sample_config):
+        """A slow get_status must not freeze concurrent requests.
+
+        Regression guard: an ``async def`` handler that calls blocking I/O
+        runs it on the event loop and serializes every client. The handlers
+        are plain ``def`` so Starlette offloads them to a threadpool, letting
+        two concurrent /api/status requests overlap instead of running
+        back-to-back.
+        """
+        import asyncio
+        import time
+
+        app = create_app(sample_config)
+
+        sleep_s = 0.5
+
+        def slow_status(_config):
+            time.sleep(sleep_s)
+            return {"services": {}, "progress": {}, "system": {}, "version": "x"}
+
+        async def fire_two():
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+                start = time.monotonic()
+                r1, r2 = await asyncio.gather(ac.get("/api/status"), ac.get("/api/status"))
+                return time.monotonic() - start, r1, r2
+
+        with patch("immich_accelerator.dashboard.get_status", side_effect=slow_status):
+            elapsed, r1, r2 = asyncio.run(fire_two())
+
+        assert r1.status_code == 200
+        assert r2.status_code == 200
+        # Serialized would be ~2*sleep_s; overlapped stays well under that.
+        assert elapsed < sleep_s * 1.8, f"requests serialized ({elapsed:.2f}s for two {sleep_s}s calls) — blocking I/O is running on the event loop"
+
     def test_api_requeue_handles_400_as_ok(self, sample_config):
         """400 from Immich means 'already running' which is fine."""
         import urllib.error

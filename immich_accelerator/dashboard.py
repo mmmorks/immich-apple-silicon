@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -38,6 +39,12 @@ _ml_cache = None
 _ml_cache_ts = 0.0
 _ml_last_total = 0
 _ml_last_ts = 0.0
+
+# Serializes the cache check-and-update in get_status / get_status_ml. The
+# handlers run in a threadpool (sync defs), so concurrent requests would
+# otherwise race the module-global caches and the throughput rate's
+# read-modify-write. Held across the body, it also gives single-flight caching.
+_status_lock = threading.Lock()
 
 
 def _get_accelerator_version() -> str:
@@ -144,196 +151,196 @@ def get_status(config: dict) -> dict:
         return get_status_ml(config)
 
     global _cache, _cache_ts
+    with _status_lock:
+        now = time.monotonic()
+        if now - _cache_ts < _CACHE_TTL and _cache:
+            return _cache
 
-    now = time.monotonic()
-    if now - _cache_ts < _CACHE_TTL and _cache:
-        return _cache
+        # Service health
+        import urllib.request as _urlreq
 
-    # Service health
-    import urllib.request as _urlreq
-
-    ml_alive = False
-    try:
-        with _urlreq.urlopen("http://localhost:3003/ping", timeout=2) as r:
-            ml_alive = r.read().decode().strip() == "pong"
-    except Exception:
-        pass
-
-    # Check worker PID file (more reliable than pgrep — process name is 'node', not 'immich')
-    worker_alive = False
-    worker_rss_mb = 0
-    pid_file = Path.home() / ".immich-accelerator" / "pids" / "worker.pid"
-    try:
-        if pid_file.exists():
-            pid = int(pid_file.read_text().strip().split("\n")[0])
-            os.kill(pid, 0)  # check if process exists
-            worker_alive = True
-            # Grab RSS for memory-growth detection. On macOS `ps -o rss=`
-            # returns kilobytes. Rising RSS over hours suggests a libvips
-            # or Sharp memory leak causing the thumbnail slowdown (#33).
-            rss_out = subprocess.run(
-                ["ps", "-p", str(pid), "-o", "rss="],
-                capture_output=True,
-                text=True,
-                timeout=3,
-            )
-            if rss_out.returncode == 0 and rss_out.stdout.strip():
-                worker_rss_mb = round(int(rss_out.stdout.strip()) / 1024)
-    except (ValueError, OSError, subprocess.SubprocessError):
-        pass
-
-    # Processing counts
-    # Exclude hidden assets (Live Photo motion files) — Immich skips them too
-    counts_raw = _query_db(
-        "SELECT COUNT(*) FILTER (WHERE thumbhash IS NOT NULL), COUNT(*), "
-        "(SELECT COUNT(*) FROM smart_search), "
-        '(SELECT COUNT(*) FROM asset_job_status WHERE "facesRecognizedAt" IS NOT NULL), '
-        '(SELECT COUNT(*) FROM asset_job_status WHERE "ocrAt" IS NOT NULL), '
-        "COUNT(*) FILTER (WHERE type = 'VIDEO' AND visibility != 'hidden'), "
-        "(SELECT COUNT(*) FROM asset_file af JOIN asset a ON a.id = af.\"assetId\" WHERE af.type = 'encoded_video' AND a.visibility != 'hidden') "
-        "FROM asset WHERE \"deletedAt\" IS NULL AND visibility != 'hidden'",
-        config,
-    )
-
-    thumbs, total, clip, faces, ocr, total_videos, encoded_videos = 0, 0, 0, 0, 0, 0, 0
-    if counts_raw and "|" in counts_raw:
-        parts = counts_raw.split("|")
-        if len(parts) == 7:
-            with contextlib.suppress(ValueError):
-                thumbs, total, clip, faces, ocr, total_videos, encoded_videos = [int(p) for p in parts]
-
-    # System metrics
-    load_raw = _run(["sysctl", "-n", "vm.loadavg"])
-    load_1m = 0.0
-    if load_raw:
-        with contextlib.suppress(ValueError, IndexError):
-            load_1m = float(load_raw.strip("{ }").split()[0])
-
-    # Static hardware info (never changes, cached on first call)
-    global _static_hw
-    if _static_hw is None:
-        mem_raw = _run(["sysctl", "-n", "hw.memsize"])
-        cpu_raw = _run(["sysctl", "-n", "hw.ncpu"])
-        _static_hw = {
-            "mem_total_gb": round(int(mem_raw) / (1024**3), 1) if mem_raw else 0,
-            "cpus": int(cpu_raw) if cpu_raw else 0,
-        }
-
-    # Per-queue activity from Immich jobs API. Also capture the raw
-    # active + waiting counts so the frontend can show "X remaining"
-    # (matching what the Immich admin panel shows) instead of only
-    # displaying DB-derived done/total which measures a different thing.
-    queue_status = {}
-    queue_counts = {}
-    api_key = config.get("api_key", "")
-    immich_url = config.get("immich_url", "http://localhost:2283")
-    jobs_api_error = ""
-    if api_key:
-        import urllib.request as _urlreq2
-
+        ml_alive = False
         try:
-            req = _urlreq2.Request(f"{immich_url}/api/jobs", headers={"x-api-key": api_key})
-            with _urlreq2.urlopen(req, timeout=5) as r:
-                body = r.read()
-                if not body or not body.strip():
-                    raise ValueError(f"empty response from {immich_url}/api/jobs")
-                jobs = json.loads(body)
-                queue_map = {
-                    "thumbnailGeneration": "thumbnails",
-                    "smartSearch": "clip",
-                    "faceDetection": "faces",
-                    "ocr": "ocr",
-                    "videoConversion": "video",
-                }
-                for immich_name, our_name in queue_map.items():
-                    counts = jobs.get(immich_name, {}).get("jobCounts", {})
-                    active = counts.get("active", 0)
-                    waiting = counts.get("waiting", 0)
-                    queue_status[our_name] = (active + waiting) > 0
-                    queue_counts[our_name] = active + waiting
-        except Exception as e:
-            err = str(e)
-            # Make common errors human-readable
-            if "Expecting value" in err or "empty response" in err:
-                jobs_api_error = "Immich API returned empty response (check immich_url in config)"
-            elif "401" in err or "403" in err:
-                jobs_api_error = "API key rejected (check api_key in config)"
-            elif "Connection refused" in err or "ECONNREFUSED" in err:
-                jobs_api_error = f"cannot reach {immich_url} (is Immich running?)"
-            elif "timed out" in err.lower():
-                jobs_api_error = "Immich API timed out (server under heavy load?)"
-            else:
-                jobs_api_error = err[:200]
-            log.warning("jobs API unreachable: %s", jobs_api_error)
-    else:
-        jobs_api_error = "no api_key configured"
+            with _urlreq.urlopen("http://localhost:3003/ping", timeout=2) as r:
+                ml_alive = r.read().decode().strip() == "pong"
+        except Exception:
+            pass
 
-    # Versions
-    version = config.get("version", "?")
+        # Check worker PID file (more reliable than pgrep — process name is 'node', not 'immich')
+        worker_alive = False
+        worker_rss_mb = 0
+        pid_file = Path.home() / ".immich-accelerator" / "pids" / "worker.pid"
+        try:
+            if pid_file.exists():
+                pid = int(pid_file.read_text().strip().split("\n")[0])
+                os.kill(pid, 0)  # check if process exists
+                worker_alive = True
+                # Grab RSS for memory-growth detection. On macOS `ps -o rss=`
+                # returns kilobytes. Rising RSS over hours suggests a libvips
+                # or Sharp memory leak causing the thumbnail slowdown (#33).
+                rss_out = subprocess.run(
+                    ["ps", "-p", str(pid), "-o", "rss="],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                )
+                if rss_out.returncode == 0 and rss_out.stdout.strip():
+                    worker_rss_mb = round(int(rss_out.stdout.strip()) / 1024)
+        except (ValueError, OSError, subprocess.SubprocessError):
+            pass
 
-    # When all queues are confirmed idle (API responded, nothing active),
-    # unprocessable assets are "skipped." Only apply when we actually got
-    # queue data — empty queue_status means API unreachable, not "idle."
-    queues_known = bool(queue_status)
-    any_active = queues_known and any(queue_status.values())
+        # Processing counts
+        # Exclude hidden assets (Live Photo motion files) — Immich skips them too
+        counts_raw = _query_db(
+            "SELECT COUNT(*) FILTER (WHERE thumbhash IS NOT NULL), COUNT(*), "
+            "(SELECT COUNT(*) FROM smart_search), "
+            '(SELECT COUNT(*) FROM asset_job_status WHERE "facesRecognizedAt" IS NOT NULL), '
+            '(SELECT COUNT(*) FROM asset_job_status WHERE "ocrAt" IS NOT NULL), '
+            "COUNT(*) FILTER (WHERE type = 'VIDEO' AND visibility != 'hidden'), "
+            "(SELECT COUNT(*) FROM asset_file af JOIN asset a ON a.id = af.\"assetId\" WHERE af.type = 'encoded_video' AND a.visibility != 'hidden') "
+            "FROM asset WHERE \"deletedAt\" IS NULL AND visibility != 'hidden'",
+            config,
+        )
 
-    def prog(done, tot):
-        if queues_known and not any_active and done < tot:
-            return {"done": done, "total": tot, "pct": 100.0, "skipped": tot - done}
-        return {
-            "done": done,
-            "total": tot,
-            "pct": round(done / max(tot, 1) * 100, 1),
-            "skipped": 0,
+        thumbs, total, clip, faces, ocr, total_videos, encoded_videos = 0, 0, 0, 0, 0, 0, 0
+        if counts_raw and "|" in counts_raw:
+            parts = counts_raw.split("|")
+            if len(parts) == 7:
+                with contextlib.suppress(ValueError):
+                    thumbs, total, clip, faces, ocr, total_videos, encoded_videos = [int(p) for p in parts]
+
+        # System metrics
+        load_raw = _run(["sysctl", "-n", "vm.loadavg"])
+        load_1m = 0.0
+        if load_raw:
+            with contextlib.suppress(ValueError, IndexError):
+                load_1m = float(load_raw.strip("{ }").split()[0])
+
+        # Static hardware info (never changes, cached on first call)
+        global _static_hw
+        if _static_hw is None:
+            mem_raw = _run(["sysctl", "-n", "hw.memsize"])
+            cpu_raw = _run(["sysctl", "-n", "hw.ncpu"])
+            _static_hw = {
+                "mem_total_gb": round(int(mem_raw) / (1024**3), 1) if mem_raw else 0,
+                "cpus": int(cpu_raw) if cpu_raw else 0,
+            }
+
+        # Per-queue activity from Immich jobs API. Also capture the raw
+        # active + waiting counts so the frontend can show "X remaining"
+        # (matching what the Immich admin panel shows) instead of only
+        # displaying DB-derived done/total which measures a different thing.
+        queue_status = {}
+        queue_counts = {}
+        api_key = config.get("api_key", "")
+        immich_url = config.get("immich_url", "http://localhost:2283")
+        jobs_api_error = ""
+        if api_key:
+            import urllib.request as _urlreq2
+
+            try:
+                req = _urlreq2.Request(f"{immich_url}/api/jobs", headers={"x-api-key": api_key})
+                with _urlreq2.urlopen(req, timeout=5) as r:
+                    body = r.read()
+                    if not body or not body.strip():
+                        raise ValueError(f"empty response from {immich_url}/api/jobs")
+                    jobs = json.loads(body)
+                    queue_map = {
+                        "thumbnailGeneration": "thumbnails",
+                        "smartSearch": "clip",
+                        "faceDetection": "faces",
+                        "ocr": "ocr",
+                        "videoConversion": "video",
+                    }
+                    for immich_name, our_name in queue_map.items():
+                        counts = jobs.get(immich_name, {}).get("jobCounts", {})
+                        active = counts.get("active", 0)
+                        waiting = counts.get("waiting", 0)
+                        queue_status[our_name] = (active + waiting) > 0
+                        queue_counts[our_name] = active + waiting
+            except Exception as e:
+                err = str(e)
+                # Make common errors human-readable
+                if "Expecting value" in err or "empty response" in err:
+                    jobs_api_error = "Immich API returned empty response (check immich_url in config)"
+                elif "401" in err or "403" in err:
+                    jobs_api_error = "API key rejected (check api_key in config)"
+                elif "Connection refused" in err or "ECONNREFUSED" in err:
+                    jobs_api_error = f"cannot reach {immich_url} (is Immich running?)"
+                elif "timed out" in err.lower():
+                    jobs_api_error = "Immich API timed out (server under heavy load?)"
+                else:
+                    jobs_api_error = err[:200]
+                log.warning("jobs API unreachable: %s", jobs_api_error)
+        else:
+            jobs_api_error = "no api_key configured"
+
+        # Versions
+        version = config.get("version", "?")
+
+        # When all queues are confirmed idle (API responded, nothing active),
+        # unprocessable assets are "skipped." Only apply when we actually got
+        # queue data — empty queue_status means API unreachable, not "idle."
+        queues_known = bool(queue_status)
+        any_active = queues_known and any(queue_status.values())
+
+        def prog(done, tot):
+            if queues_known and not any_active and done < tot:
+                return {"done": done, "total": tot, "pct": 100.0, "skipped": tot - done}
+            return {
+                "done": done,
+                "total": tot,
+                "pct": round(done / max(tot, 1) * 100, 1),
+                "skipped": 0,
+            }
+
+        # Video transcode: use queue state for pct when active, 100% when idle + transcoded
+        vid_active = queue_status.get("video", False)
+        if vid_active and total_videos > 0:
+            vid_pct = round(encoded_videos / total_videos * 100, 1)
+        elif encoded_videos > 0:
+            vid_pct = 100.0
+        else:
+            vid_pct = 0
+
+        status = {
+            "mode": "full",
+            "services": {
+                "worker": {
+                    "alive": worker_alive,
+                    "name": "Microservices Worker",
+                    "rss_mb": worker_rss_mb,
+                },
+                "ml": {"alive": ml_alive, "name": "ML Service"},
+                "docker": {"alive": total > 0, "name": "Docker (API)"},
+            },
+            "progress": {
+                "thumbnails": prog(thumbs, total),
+                "clip": prog(clip, total),
+                "faces": prog(faces, total),
+                "ocr": prog(ocr, total),
+                "video": {
+                    "done": encoded_videos,
+                    "total": total_videos,
+                    "pct": vid_pct,
+                    "skipped": 0,
+                },
+            },
+            "system": {
+                "load_1m": load_1m,
+                "mem_total_gb": _static_hw["mem_total_gb"],
+                "cpus": _static_hw["cpus"],
+            },
+            "version": version,
+            "accelerator_version": _get_accelerator_version(),
+            "queue_active": queue_status,
+            "queue_counts": queue_counts,
+            "jobs_api_error": jobs_api_error,
         }
 
-    # Video transcode: use queue state for pct when active, 100% when idle + transcoded
-    vid_active = queue_status.get("video", False)
-    if vid_active and total_videos > 0:
-        vid_pct = round(encoded_videos / total_videos * 100, 1)
-    elif encoded_videos > 0:
-        vid_pct = 100.0
-    else:
-        vid_pct = 0
-
-    status = {
-        "mode": "full",
-        "services": {
-            "worker": {
-                "alive": worker_alive,
-                "name": "Microservices Worker",
-                "rss_mb": worker_rss_mb,
-            },
-            "ml": {"alive": ml_alive, "name": "ML Service"},
-            "docker": {"alive": total > 0, "name": "Docker (API)"},
-        },
-        "progress": {
-            "thumbnails": prog(thumbs, total),
-            "clip": prog(clip, total),
-            "faces": prog(faces, total),
-            "ocr": prog(ocr, total),
-            "video": {
-                "done": encoded_videos,
-                "total": total_videos,
-                "pct": vid_pct,
-                "skipped": 0,
-            },
-        },
-        "system": {
-            "load_1m": load_1m,
-            "mem_total_gb": _static_hw["mem_total_gb"],
-            "cpus": _static_hw["cpus"],
-        },
-        "version": version,
-        "accelerator_version": _get_accelerator_version(),
-        "queue_active": queue_status,
-        "queue_counts": queue_counts,
-        "jobs_api_error": jobs_api_error,
-    }
-
-    _cache = status
-    _cache_ts = now
-    return status
+        _cache = status
+        _cache_ts = now
+        return status
 
 
 def _ping_ml(config: dict) -> bool:
@@ -396,45 +403,46 @@ def get_status_ml(config: dict) -> dict:
     from . import metrics
     from .ml_stats import parse_ml_log
 
-    now = time.monotonic()
-    if _ml_cache and now - _ml_cache_ts < _CACHE_TTL:
-        return _ml_cache
+    with _status_lock:
+        now = time.monotonic()
+        if _ml_cache and now - _ml_cache_ts < _CACHE_TTL:
+            return _ml_cache
 
-    ml_alive = _ping_ml(config)
-    log_path = Path.home() / ".immich-accelerator" / "logs" / "ml.log"
-    stats = parse_ml_log(_tail_text(log_path))  # recent tail: tasks + latency
-    cumulative = _count_predicts(log_path)  # monotonic full-file count
+        ml_alive = _ping_ml(config)
+        log_path = Path.home() / ".immich-accelerator" / "logs" / "ml.log"
+        stats = parse_ml_log(_tail_text(log_path))  # recent tail: tasks + latency
+        cumulative = _count_predicts(log_path)  # monotonic full-file count
 
-    rate = 0.0
-    if _ml_last_ts and now > _ml_last_ts and cumulative >= _ml_last_total:
-        rate = (cumulative - _ml_last_total) / (now - _ml_last_ts)
-    _ml_last_total = cumulative
-    _ml_last_ts = now
+        rate = 0.0
+        if _ml_last_ts and now > _ml_last_ts and cumulative >= _ml_last_total:
+            rate = (cumulative - _ml_last_total) / (now - _ml_last_ts)
+        _ml_last_total = cumulative
+        _ml_last_ts = now
 
-    pm = metrics.sample_powermetrics() if config.get("metrics_powermetrics") else None
+        pm = metrics.sample_powermetrics() if config.get("metrics_powermetrics") else None
 
-    status = {
-        "mode": "ml-only",
-        "services": {"ml": {"alive": ml_alive, "name": "ML Service"}},
-        "ml": {
-            "throughput_rps": round(rate, 2),
-            "tasks": stats["tasks"],
-            "latency_ms": stats["latency_ms"],
-            "total_predicts": cumulative,
-            "endpoint": f"http://{config.get('ml_host', '0.0.0.0')}:{config.get('ml_port', 3003)}",
-        },
-        "hardware": {
-            "gpu_residency_pct": pm.get("gpu_residency_pct") if pm else None,
-            "ane_mw": pm.get("ane_mw") if pm else None,
-            "powermetrics": bool(pm and (pm.get("gpu_residency_pct") is not None or pm.get("ane_mw") is not None)),
-        },
-        "system": _system_metrics(),
-        "version": config.get("version", "—"),
-        "accelerator_version": _get_accelerator_version(),
-    }
-    _ml_cache = status
-    _ml_cache_ts = now
-    return status
+        status = {
+            "mode": "ml-only",
+            "services": {"ml": {"alive": ml_alive, "name": "ML Service"}},
+            "ml": {
+                "throughput_rps": round(rate, 2),
+                "tasks": stats["tasks"],
+                "latency_ms": stats["latency_ms"],
+                "total_predicts": cumulative,
+                "endpoint": f"http://{config.get('ml_host', '0.0.0.0')}:{config.get('ml_port', 3003)}",
+            },
+            "hardware": {
+                "gpu_residency_pct": pm.get("gpu_residency_pct") if pm else None,
+                "ane_mw": pm.get("ane_mw") if pm else None,
+                "powermetrics": bool(pm and (pm.get("gpu_residency_pct") is not None or pm.get("ane_mw") is not None)),
+            },
+            "system": _system_metrics(),
+            "version": config.get("version", "—"),
+            "accelerator_version": _get_accelerator_version(),
+        }
+        _ml_cache = status
+        _ml_cache_ts = now
+        return status
 
 
 def _load_html() -> str:
@@ -450,16 +458,20 @@ def create_app(config: dict):
 
     app = FastAPI(title="Immich Accelerator Dashboard")
 
+    # Handlers are sync defs on purpose: Starlette offloads sync path operations
+    # to a threadpool, so their blocking file/subprocess/HTTP work never runs on
+    # the async event loop and one slow downstream call can't freeze other clients.
+
     @app.get("/", response_class=HTMLResponse)
-    async def index():
+    def index():
         return _load_html()
 
     @app.get("/api/status")
-    async def api_status():
+    def api_status():
         return JSONResponse(get_status(config))
 
     @app.post("/api/requeue")
-    async def api_requeue():
+    def api_requeue():
         """Trigger 'Run All Missing' for thumbnail, CLIP, faces, and OCR queues."""
         import urllib.error
         import urllib.request

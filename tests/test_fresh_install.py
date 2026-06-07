@@ -150,6 +150,7 @@ class TestDashboardDependenciesAreAvailable:
             "logging",
             "os",
             "subprocess",
+            "threading",
             "time",
             "pathlib",
             "urllib",
