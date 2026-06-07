@@ -50,7 +50,7 @@
 - Create: `tests/fixtures/queries.txt`
 - Create: `tests/fixtures/README.md`
 
-- [ ] **Step 1: Write the query list**
+- [x] **Step 1: Write the query list**
 
 Reuse the existing `DEFAULT_QUERIES` content from `scripts/embedding_parity.py` (lines ~77–92) so the gate exercises the same queries the manual harness uses. Read that list and copy each query, one per line, into `tests/fixtures/queries.txt`. Example shape (use the actual list from the script, not these placeholders):
 
@@ -60,7 +60,7 @@ a city skyline at night
 ...
 ```
 
-- [ ] **Step 2: Create the fixtures README scaffold**
+- [x] **Step 2: Create the fixtures README scaffold**
 
 ```markdown
 # Parity test fixtures
@@ -90,7 +90,7 @@ Reference embeddings frozen from the upstream ONNX models Immich ships
 resolved commit SHA, onnxruntime version, dim, and generation date.
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add tests/fixtures/queries.txt tests/fixtures/README.md
@@ -113,7 +113,7 @@ NASA imagery is explicitly public domain and served from stable
 downloads a documented list, converts to RGB JPEG, resizes the long side to
 ≤512px, and appends provenance to the README.
 
-- [ ] **Step 1: Write the fetch script**
+- [x] **Step 1: Write the fetch script**
 
 ```python
 #!/usr/bin/env python3
@@ -173,17 +173,17 @@ if __name__ == "__main__":
     sys.exit(main())
 ```
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
 Run: `.venv/bin/python scripts/fetch_pd_clip_fixtures.py`
 Expected: 8 JPEGs written to `tests/fixtures/clip/`, plus a printed provenance table.
 If any URL 404s, replace it with another NASA PD image and rerun. Confirm each file is a valid small JPEG: `.venv/bin/python -c "from PIL import Image,ImageFile; import glob; [print(p, Image.open(p).size) for p in glob.glob('tests/fixtures/clip/*.jpg')]"`
 
-- [ ] **Step 3: Fill the README provenance table**
+- [x] **Step 3: Fill the README provenance table**
 
 Paste the printed rows into the `clip/` table in `tests/fixtures/README.md`.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add scripts/fetch_pd_clip_fixtures.py tests/fixtures/clip tests/fixtures/README.md
@@ -206,7 +206,7 @@ text path uses `clean_text(canonicalize=False)` + the open_clip tokenizer to
 match what the existing `immich` reference (`embed_openclip_refs`) feeds, so a
 later sanity check (ONNX ≈ open_clip ≈ 1.0) confirms equivalence.
 
-- [ ] **Step 1: Add the ONNX backend function**
+- [x] **Step 1: Add the ONNX backend function**
 
 Insert after `embed_openclip_refs` (around line 222). Note `clip_parity.py`
 already imports `gc`, `io`, `np`, `Image`, and the `CLIP_*` constants.
@@ -268,7 +268,7 @@ def embed_onnx(
     return np.stack(img_out), np.stack(txt_out)
 ```
 
-- [ ] **Step 2: Wire `onnx` into `--ref` and the report loop**
+- [x] **Step 2: Wire `onnx` into `--ref` and the report loop**
 
 In `main()` (around line 232) add `"onnx"` to the `--ref` choices and the
 default list, and ensure the report orders it. Change the choices line:
@@ -296,12 +296,12 @@ when requested, and update the ordering line:
 are unchanged; `onnx` is an additional diagnostic column. The golden gate
 itself lives in the new test, not this script's verdict.)
 
-- [ ] **Step 3: Lint**
+- [x] **Step 3: Lint**
 
 Run: `.venv/bin/python -m ruff check scripts/clip_parity.py`
 Expected: no errors (the `S310`/import-order rules: keep imports grouped as shown; `hf_hub_download` over a raw URL avoids `S310`).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add scripts/clip_parity.py
@@ -326,14 +326,14 @@ tokenizer (not CLIP BPE). The script already constructs `SiglipTextTokenizer`
 from a `tokenizer.json` (see `embed_hf`, ~line 303) and already has the SigLIP
 image squash in its `immich` variant — reuse both.
 
-- [ ] **Step 1: Read the existing SigLIP transform + tokenizer usage**
+- [x] **Step 1: Read the existing SigLIP transform + tokenizer usage**
 
 Read `scripts/embedding_parity.py` around `embed_hf` (lines ~263–345) and note:
 the exact image-pixel function it uses for the `immich` variant, the
 `SiglipTextTokenizer` import path, and the `HF_REPO` constant. The ONNX backend
 must feed byte-identical inputs.
 
-- [ ] **Step 2: Add the SigLIP2 ONNX backend**
+- [x] **Step 2: Add the SigLIP2 ONNX backend**
 
 Insert after `embed_hf`. Use the immich-app webli repo; resolve input names
 dynamically (SigLIP visual input = pixel_values, textual = input_ids, but read
@@ -391,7 +391,7 @@ def embed_onnx_siglip2(images: list[tuple[str, bytes]], queries: list[str]) -> t
 > the two marked lines to match. If `gc`/`io` aren't already imported in this
 > script, add them.
 
-- [ ] **Step 3: Wire `onnx` into `--ref`**
+- [x] **Step 3: Wire `onnx` into `--ref`**
 
 In `main()` (around line 388) add `"onnx"` to the `--ref` choices, and after the
 HF refs are built (around line 431) merge it in and reorder:
@@ -402,12 +402,12 @@ HF refs are built (around line 431) merge it in and reorder:
     refs = {k: refs[k] for k in ("onnx", "immich", "transformers", "openclip") if k in refs}
 ```
 
-- [ ] **Step 4: Lint**
+- [x] **Step 4: Lint**
 
 Run: `.venv/bin/python -m ruff check scripts/embedding_parity.py`
 Expected: no errors.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/embedding_parity.py
@@ -431,7 +431,7 @@ The script already has `make_upstream_detector`, `upstream_faces` (SCRFD ONNX),
 and `embed` (ArcFace ONNX). Add one helper that returns, per upstream-detected
 face on a `Sample`, the frozen-golden tuple the generator and test need.
 
-- [ ] **Step 1: Add `upstream_embeddings()`**
+- [x] **Step 1: Add `upstream_embeddings()`**
 
 Insert after `embed()` (around line 308):
 
@@ -466,12 +466,12 @@ def upstream_embeddings(samples: list[Sample], det_size: int = 640) -> list[dict
 > If `cv2` isn't imported, add `import cv2`. If a sibling decode helper already
 > exists, use it instead.
 
-- [ ] **Step 2: Lint**
+- [x] **Step 2: Lint**
 
 Run: `.venv/bin/python -m ruff check scripts/face_embedding_parity.py`
 Expected: no errors.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add scripts/face_embedding_parity.py
@@ -497,7 +497,7 @@ Task 7. Scripts are loaded by path elsewhere, but this one runs as
 `.venv/bin/python scripts/gen_parity_golden.py` from `ml/`, so `import`ing the
 sibling scripts needs the scripts dir on `sys.path`.
 
-- [ ] **Step 1: Write the generator (CLIP portion)**
+- [x] **Step 1: Write the generator (CLIP portion)**
 
 ```python
 #!/usr/bin/env python3
@@ -624,12 +624,12 @@ if __name__ == "__main__":
     sys.exit(main())
 ```
 
-- [ ] **Step 2: Lint**
+- [x] **Step 2: Lint**
 
 Run: `.venv/bin/python -m ruff check scripts/gen_parity_golden.py`
 Expected: no errors.
 
-- [ ] **Step 3: Commit (script only — goldens generated in Task 13)**
+- [x] **Step 3: Commit (script only — goldens generated in Task 13)**
 
 ```bash
 git add scripts/gen_parity_golden.py
@@ -654,7 +654,7 @@ The face generator downloads the LFW subset, **saves the selected images** into
 `tests/fixtures/faces/<identity>/` (so the test is hermetic), runs the upstream
 pipeline, computes the golden top-1 accuracy, and freezes everything.
 
-- [ ] **Step 1: Add `gen_face()` and register it**
+- [x] **Step 1: Add `gen_face()` and register it**
 
 Insert before `GENERATORS`:
 
@@ -724,12 +724,12 @@ GENERATORS = {"openai_clip": gen_openai_clip, "siglip2": gen_siglip2, "face": ge
 > arrays for query and gallery with same-image exclusion is what the harness test
 > `test_top1_excludes_same_image` already exercises.
 
-- [ ] **Step 2: Lint**
+- [x] **Step 2: Lint**
 
 Run: `.venv/bin/python -m ruff check scripts/gen_parity_golden.py`
 Expected: no errors.
 
-- [ ] **Step 3: Commit (script only)**
+- [x] **Step 3: Commit (script only)**
 
 ```bash
 git add scripts/gen_parity_golden.py
@@ -753,7 +753,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 Auto-detect dependency/golden availability; `ML_RUN_PARITY=1` turns "unavailable"
 into a hard failure rather than a skip.
 
-- [ ] **Step 1: Write the failing unit test**
+- [x] **Step 1: Write the failing unit test**
 
 ```python
 """Hermetic tests for the parity-gate skip/hard-fail decision logic."""
@@ -791,12 +791,12 @@ def test_forced_missing_is_hard_fail(monkeypatch):
         g.gate_reason("openai_clip")
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `.venv/bin/python -m pytest tests/test_parity_gate.py -v`
 Expected: FAIL — `ModuleNotFoundError: tests._parity_gate`.
 
-- [ ] **Step 3: Write `tests/_parity_gate.py`**
+- [x] **Step 3: Write `tests/_parity_gate.py`**
 
 ```python
 """Decide whether weights-gated parity tests run, skip, or hard-fail.
@@ -853,12 +853,12 @@ def gate_reason(stem: str) -> str | None:
 Also ensure `tests/__init__.py` exists (it does — confirmed in the tests dir
 listing). If not, create an empty one so `from tests import _parity_gate` works.
 
-- [ ] **Step 4: Run it to verify it passes**
+- [x] **Step 4: Run it to verify it passes**
 
 Run: `.venv/bin/python -m pytest tests/test_parity_gate.py -v`
 Expected: PASS (4 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/_parity_gate.py tests/test_parity_gate.py
@@ -877,7 +877,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 Parametrized over the two CLIP models. Loads the MLX production backend, embeds
 committed fixtures + queries, asserts per-item min cosine ≥ 0.99 vs golden.
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 ```python
 """Weights-gated CLIP parity: MLX production backend vs committed ONNX golden.
@@ -955,12 +955,12 @@ def test_clip_mlx_matches_onnx_golden(stem, model_name):
     assert not txt_fail, f"{model_name}: text cosine below {THRESHOLD}: {txt_fail}"
 ```
 
-- [ ] **Step 2: Run it (auto-detect skip path)**
+- [x] **Step 2: Run it (auto-detect skip path)**
 
 Run: `.venv/bin/python -m pytest tests/test_clip_golden_parity.py -v`
 Expected: 2 SKIPPED (golden artifacts don't exist yet — they're generated in Task 13). This confirms the gate wiring works without weights.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add tests/test_clip_golden_parity.py
@@ -983,7 +983,7 @@ Runs the MLX/Apple-Vision fork pipeline on committed LFW fixtures, greedy-matche
 to golden faces by bbox IoU, asserts median drift cosine ≥ 0.90 and top-1 drop ≤
 0.02. Apple Vision is macOS-only, so the gate also skips off-macOS.
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 ```python
 """Weights-gated face parity: MLX/Apple-Vision fork vs committed upstream golden.
@@ -1094,12 +1094,12 @@ def test_face_mlx_matches_onnx_golden():
 > (which matches two live detector lists); both use the same IoU helper and 0.3
 > threshold.
 
-- [ ] **Step 2: Run it (auto-detect skip path)**
+- [x] **Step 2: Run it (auto-detect skip path)**
 
 Run: `.venv/bin/python -m pytest tests/test_face_golden_parity.py -v`
 Expected: 1 SKIPPED (golden missing until Task 13).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add tests/test_face_golden_parity.py
@@ -1119,14 +1119,14 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 - Rename: `tests/test_embedding_parity.py` → `tests/test_embedding_parity_harness.py`
 - Rename: `tests/test_face_embedding_parity.py` → `tests/test_face_embedding_parity_harness.py`
 
-- [ ] **Step 1: Rename with git (preserves history)**
+- [x] **Step 1: Rename with git (preserves history)**
 
 ```bash
 git mv tests/test_embedding_parity.py tests/test_embedding_parity_harness.py
 git mv tests/test_face_embedding_parity.py tests/test_face_embedding_parity_harness.py
 ```
 
-- [ ] **Step 2: Update each file's module docstring**
+- [x] **Step 2: Update each file's module docstring**
 
 In both files, prepend a one-line note to the existing docstring clarifying scope,
 e.g. for `test_embedding_parity_harness.py`:
@@ -1143,12 +1143,12 @@ committed ONNX golden references; this file covers only the helper math
 And analogously for `test_face_embedding_parity_harness.py` (point at
 `test_face_golden_parity.py`). Keep the rest of each docstring/body unchanged.
 
-- [ ] **Step 3: Run the renamed tests to confirm nothing broke**
+- [x] **Step 3: Run the renamed tests to confirm nothing broke**
 
 Run: `.venv/bin/python -m pytest tests/test_embedding_parity_harness.py tests/test_face_embedding_parity_harness.py -v`
 Expected: all PASS (same tests as before, new filenames).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add -A tests/
@@ -1167,7 +1167,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 **Files:** none (verification)
 
-- [ ] **Step 1: Run the full ml/ suite (default hermetic mode)**
+- [x] **Step 1: Run the full ml/ suite (default hermetic mode)**
 
 Run: `.venv/bin/python -m pytest`
 Expected: all prior tests PASS; the 3 new gated tests (`test_clip_golden_parity`
@@ -1175,7 +1175,7 @@ Expected: all prior tests PASS; the 3 new gated tests (`test_clip_golden_parity`
 `test_parity_gate` PASSes. No failures, no errors. (Don't pipe through `tail` —
 read the real summary line.)
 
-- [ ] **Step 2: Confirm exit code**
+- [x] **Step 2: Confirm exit code**
 
 Run: `.venv/bin/python -m pytest; echo "exit=$?"`
 Expected: `exit=0`.
@@ -1192,7 +1192,7 @@ Expected: `exit=0`.
 This task needs real model downloads (large, esp. SigLIP2 ~3.5 GB) and macOS for
 the face leg. Per repo policy, verify locally before claiming it works.
 
-- [ ] **Step 1: Generate all goldens**
+- [x] **Step 1: Generate all goldens**
 
 Run: `.venv/bin/python scripts/gen_parity_golden.py --targets openai_clip siglip2 face`
 Expected: writes `tests/fixtures/golden/{openai_clip,siglip2,face}.npz` + `.json`
@@ -1200,7 +1200,7 @@ and populates `tests/fixtures/faces/<id>/`. No "non-finite"/"zero-norm"/"zero
 faces" errors. If the SigLIP2 textual dtype/tokenizer note from Task 4 was wrong,
 fix it now and rerun.
 
-- [ ] **Step 2: Fill in the resolved ONNX commit SHAs**
+- [x] **Step 2: Fill in the resolved ONNX commit SHAs**
 
 For each CLIP manifest, replace `"FILL_IN_resolved_sha"` with the resolved repo
 revision. Get it via:
@@ -1212,25 +1212,25 @@ for r in ("immich-app/ViT-B-32__openai", "immich-app/ViT-SO400M-16-SigLIP2-384__
 PY
 ```
 
-- [ ] **Step 3: Run the gated tests with hard-fail enforcement**
+- [x] **Step 3: Run the gated tests with hard-fail enforcement**
 
 Run: `ML_RUN_PARITY=1 .venv/bin/python -m pytest tests/test_clip_golden_parity.py tests/test_face_golden_parity.py -v`
 Expected: all 3 PASS (CLIP ×2 cosine ≥ 0.99; face median ≥ 0.90 and top-1 drop ≤
 0.02). If a CLIP case fails near-zero cosine, that's a real weights/activation
 mismatch in the MLX backend — stop and investigate (do not relax the threshold).
 
-- [ ] **Step 4: Confirm committed size is small**
+- [x] **Step 4: Confirm committed size is small**
 
 Run: `du -sh tests/fixtures` and `git status --short tests/fixtures`
 Expected: total well under ~1 MB. If a CLIP fixture or LFW image is large, the
 fetch/gen resize step needs tightening.
 
-- [ ] **Step 5: Finalize README provenance**
+- [x] **Step 5: Finalize README provenance**
 
 Add the LFW identities + source to the `faces/` section and note the manifests
 under `golden/` in `tests/fixtures/README.md`.
 
-- [ ] **Step 6: Commit goldens + fixtures**
+- [x] **Step 6: Commit goldens + fixtures**
 
 ```bash
 git add tests/fixtures/golden tests/fixtures/faces tests/fixtures/README.md
