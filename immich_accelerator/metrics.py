@@ -21,6 +21,7 @@ Apple Silicon / macOS 26 (Mac17,9):
 So the wrapper requests both samplers. ANE exposes power (mW), not a
 utilization percentage.
 """
+
 from __future__ import annotations
 
 import plistlib
@@ -30,11 +31,7 @@ from pathlib import Path
 POWERMETRICS_WRAPPER = Path("/usr/local/sbin/immich-accelerator-powermetrics")
 POWERMETRICS_SUDOERS = Path("/etc/sudoers.d/immich-accelerator")
 
-WRAPPER_CONTENT = (
-    "#!/bin/sh\n"
-    "exec /usr/bin/powermetrics -n 1 -i 1000 "
-    "--samplers cpu_power,gpu_power -f plist\n"
-)
+WRAPPER_CONTENT = "#!/bin/sh\nexec /usr/bin/powermetrics -n 1 -i 1000 --samplers cpu_power,gpu_power -f plist\n"
 
 
 def sudoers_content(user: str) -> str:
@@ -60,9 +57,7 @@ def parse_powermetrics(raw: bytes | str) -> dict:
     proc = data.get("processor") or {}
 
     idle = gpu.get("idle_ratio")
-    gpu_residency_pct = (
-        round((1.0 - idle) * 100, 2) if isinstance(idle, (int, float)) else None
-    )
+    gpu_residency_pct = round((1.0 - idle) * 100, 2) if isinstance(idle, (int, float)) else None
 
     ane = proc.get("ane_power")
     ane_mw = float(ane) if isinstance(ane, (int, float)) else None

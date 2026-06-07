@@ -1,11 +1,8 @@
 """Tests for immich_accelerator.dashboard — status API, caching, FastAPI app."""
+
 from __future__ import annotations
 
-import json
-import os
-import time
-from pathlib import Path
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -15,17 +12,16 @@ httpx = pytest.importorskip("httpx")
 
 from immich_accelerator.dashboard import (
     _get_accelerator_version,
-    _run,
     _query_db,
-    get_status,
+    _run,
     create_app,
-    _CACHE_TTL,
+    get_status,
 )
-
 
 # ---------------------------------------------------------------------------
 # _get_accelerator_version
 # ---------------------------------------------------------------------------
+
 
 class TestGetAcceleratorVersion:
     def test_reads_version_file(self, tmp_path):
@@ -35,7 +31,6 @@ class TestGetAcceleratorVersion:
             mock_path_cls.return_value.parent.parent.__truediv__ = lambda self, x: version_file
             # Directly test: the function reads from Path(__file__).parent.parent / "VERSION"
             # We'll just verify the fallback behavior since patching __file__ is awkward
-            pass
 
     def test_fallback_on_missing_file(self):
         with patch("immich_accelerator.dashboard.Path") as mock_path_cls:
@@ -56,6 +51,7 @@ class TestGetAcceleratorVersion:
 # _run
 # ---------------------------------------------------------------------------
 
+
 class TestRun:
     def test_successful_command(self):
         result = MagicMock()
@@ -73,6 +69,7 @@ class TestRun:
 
     def test_timeout_returns_empty(self):
         import subprocess
+
         with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="cmd", timeout=5)):
             assert _run(["slow-cmd"]) == ""
 
@@ -104,6 +101,7 @@ class TestRun:
 # _query_db
 # ---------------------------------------------------------------------------
 
+
 class TestQueryDb:
     def test_uses_psql_when_password_set(self):
         config = {
@@ -113,8 +111,7 @@ class TestQueryDb:
             "db_password": "secret",
             "db_name": "immich",
         }
-        with patch("os.path.exists", return_value=True), \
-             patch("immich_accelerator.dashboard._run", return_value="42") as mock_run:
+        with patch("os.path.exists", return_value=True), patch("immich_accelerator.dashboard._run", return_value="42") as mock_run:
             result = _query_db("SELECT 1", config)
             assert result == "42"
             cmd = mock_run.call_args[0][0]
@@ -130,16 +127,14 @@ class TestQueryDb:
             "db_password": "",
             "db_name": "immich",
         }
+
         # psql not found, docker found
         def exists_side_effect(path):
             if "psql" in str(path):
                 return False
-            if "docker" in str(path):
-                return True
-            return False
+            return "docker" in str(path)
 
-        with patch("os.path.exists", side_effect=exists_side_effect), \
-             patch("immich_accelerator.dashboard._run", return_value="1") as mock_run:
+        with patch("os.path.exists", side_effect=exists_side_effect), patch("immich_accelerator.dashboard._run", return_value="1") as mock_run:
             result = _query_db("SELECT 1", config)
             assert result == "1"
             cmd = mock_run.call_args[0][0]
@@ -155,15 +150,13 @@ class TestQueryDb:
             "db_name": "immich",
             "db_container": "my_custom_postgres",
         }
+
         def exists_side_effect(path):
             if "psql" in str(path):
                 return False
-            if "docker" in str(path):
-                return True
-            return False
+            return "docker" in str(path)
 
-        with patch("os.path.exists", side_effect=exists_side_effect), \
-             patch("immich_accelerator.dashboard._run", return_value="1") as mock_run:
+        with patch("os.path.exists", side_effect=exists_side_effect), patch("immich_accelerator.dashboard._run", return_value="1") as mock_run:
             _query_db("SELECT 1", config)
             cmd = mock_run.call_args[0][0]
             assert "my_custom_postgres" in cmd
@@ -173,11 +166,13 @@ class TestQueryDb:
 # get_status
 # ---------------------------------------------------------------------------
 
+
 class TestGetStatus:
     @pytest.fixture(autouse=True)
     def reset_cache(self):
         """Reset the module-level cache before each test."""
         import immich_accelerator.dashboard as d
+
         d._cache = {}
         d._cache_ts = 0
         d._static_hw = None
@@ -188,11 +183,14 @@ class TestGetStatus:
 
     def test_returns_structure(self, sample_config):
         import immich_accelerator.dashboard as d
+
         d._static_hw = {"mem_total_gb": 32.0, "cpus": 10}
 
-        with patch("urllib.request.urlopen", side_effect=OSError), \
-             patch("immich_accelerator.dashboard._query_db", return_value="100|200|100|100|50|10|5"), \
-             patch("immich_accelerator.dashboard._run", return_value="{ 1.50 2.00 3.00 }"):
+        with (
+            patch("urllib.request.urlopen", side_effect=OSError),
+            patch("immich_accelerator.dashboard._query_db", return_value="100|200|100|100|50|10|5"),
+            patch("immich_accelerator.dashboard._run", return_value="{ 1.50 2.00 3.00 }"),
+        ):
             status = get_status(sample_config)
 
         assert "services" in status
@@ -204,11 +202,14 @@ class TestGetStatus:
 
     def test_services_section(self, sample_config):
         import immich_accelerator.dashboard as d
+
         d._static_hw = {"mem_total_gb": 32.0, "cpus": 10}
 
-        with patch("urllib.request.urlopen", side_effect=OSError), \
-             patch("immich_accelerator.dashboard._query_db", return_value="50|100|50|50|25|5|3"), \
-             patch("immich_accelerator.dashboard._run", return_value="{ 0.50 1.00 1.50 }"):
+        with (
+            patch("urllib.request.urlopen", side_effect=OSError),
+            patch("immich_accelerator.dashboard._query_db", return_value="50|100|50|50|25|5|3"),
+            patch("immich_accelerator.dashboard._run", return_value="{ 0.50 1.00 1.50 }"),
+        ):
             status = get_status(sample_config)
 
         assert "worker" in status["services"]
@@ -220,11 +221,14 @@ class TestGetStatus:
 
     def test_progress_section(self, sample_config):
         import immich_accelerator.dashboard as d
+
         d._static_hw = {"mem_total_gb": 32.0, "cpus": 10}
 
-        with patch("urllib.request.urlopen", side_effect=OSError), \
-             patch("immich_accelerator.dashboard._query_db", return_value="80|100|60|70|50|10|5"), \
-             patch("immich_accelerator.dashboard._run", return_value="{ 0.50 1.00 1.50 }"):
+        with (
+            patch("urllib.request.urlopen", side_effect=OSError),
+            patch("immich_accelerator.dashboard._query_db", return_value="80|100|60|70|50|10|5"),
+            patch("immich_accelerator.dashboard._run", return_value="{ 0.50 1.00 1.50 }"),
+        ):
             status = get_status(sample_config)
 
         progress = status["progress"]
@@ -242,22 +246,28 @@ class TestGetStatus:
 
     def test_progress_calculations(self, sample_config):
         import immich_accelerator.dashboard as d
+
         d._static_hw = {"mem_total_gb": 32.0, "cpus": 10}
 
-        with patch("urllib.request.urlopen", side_effect=OSError), \
-             patch("immich_accelerator.dashboard._query_db", return_value="100|100|100|100|100|10|10"), \
-             patch("immich_accelerator.dashboard._run", return_value=""):
+        with (
+            patch("urllib.request.urlopen", side_effect=OSError),
+            patch("immich_accelerator.dashboard._query_db", return_value="100|100|100|100|100|10|10"),
+            patch("immich_accelerator.dashboard._run", return_value=""),
+        ):
             status = get_status(sample_config)
 
         assert status["progress"]["thumbnails"]["pct"] == 100.0
 
     def test_caching(self, sample_config):
         import immich_accelerator.dashboard as d
+
         d._static_hw = {"mem_total_gb": 32.0, "cpus": 10}
 
-        with patch("urllib.request.urlopen", side_effect=OSError), \
-             patch("immich_accelerator.dashboard._query_db", return_value="50|100|50|50|50|5|3") as mock_db, \
-             patch("immich_accelerator.dashboard._run", return_value=""):
+        with (
+            patch("urllib.request.urlopen", side_effect=OSError),
+            patch("immich_accelerator.dashboard._query_db", return_value="50|100|50|50|50|5|3") as mock_db,
+            patch("immich_accelerator.dashboard._run", return_value=""),
+        ):
             status1 = get_status(sample_config)
             status2 = get_status(sample_config)
 
@@ -267,22 +277,24 @@ class TestGetStatus:
 
     def test_empty_db_response(self, sample_config):
         import immich_accelerator.dashboard as d
+
         d._static_hw = {"mem_total_gb": 32.0, "cpus": 10}
 
-        with patch("urllib.request.urlopen", side_effect=OSError), \
-             patch("immich_accelerator.dashboard._query_db", return_value=""), \
-             patch("immich_accelerator.dashboard._run", return_value=""):
+        with patch("urllib.request.urlopen", side_effect=OSError), patch("immich_accelerator.dashboard._query_db", return_value=""), patch("immich_accelerator.dashboard._run", return_value=""):
             status = get_status(sample_config)
 
         assert status["progress"]["thumbnails"]["total"] == 0
 
     def test_malformed_db_response(self, sample_config):
         import immich_accelerator.dashboard as d
+
         d._static_hw = {"mem_total_gb": 32.0, "cpus": 10}
 
-        with patch("urllib.request.urlopen", side_effect=OSError), \
-             patch("immich_accelerator.dashboard._query_db", return_value="not|a|valid|response"), \
-             patch("immich_accelerator.dashboard._run", return_value=""):
+        with (
+            patch("urllib.request.urlopen", side_effect=OSError),
+            patch("immich_accelerator.dashboard._query_db", return_value="not|a|valid|response"),
+            patch("immich_accelerator.dashboard._run", return_value=""),
+        ):
             status = get_status(sample_config)
 
         # Should gracefully handle parse errors
@@ -290,22 +302,28 @@ class TestGetStatus:
 
     def test_load_parsing(self, sample_config):
         import immich_accelerator.dashboard as d
+
         d._static_hw = {"mem_total_gb": 32.0, "cpus": 10}
 
-        with patch("urllib.request.urlopen", side_effect=OSError), \
-             patch("immich_accelerator.dashboard._query_db", return_value="0|0|0|0|0|0|0"), \
-             patch("immich_accelerator.dashboard._run", return_value="{ 2.50 3.00 4.00 }"):
+        with (
+            patch("urllib.request.urlopen", side_effect=OSError),
+            patch("immich_accelerator.dashboard._query_db", return_value="0|0|0|0|0|0|0"),
+            patch("immich_accelerator.dashboard._run", return_value="{ 2.50 3.00 4.00 }"),
+        ):
             status = get_status(sample_config)
 
         assert status["system"]["load_1m"] == 2.5
 
     def test_version_from_config(self, sample_config):
         import immich_accelerator.dashboard as d
+
         d._static_hw = {"mem_total_gb": 32.0, "cpus": 10}
 
-        with patch("urllib.request.urlopen", side_effect=OSError), \
-             patch("immich_accelerator.dashboard._query_db", return_value="0|0|0|0|0|0|0"), \
-             patch("immich_accelerator.dashboard._run", return_value=""):
+        with (
+            patch("urllib.request.urlopen", side_effect=OSError),
+            patch("immich_accelerator.dashboard._query_db", return_value="0|0|0|0|0|0|0"),
+            patch("immich_accelerator.dashboard._run", return_value=""),
+        ):
             status = get_status(sample_config)
 
         assert status["version"] == "2.6.3"
@@ -315,6 +333,7 @@ class TestGetStatus:
 # FastAPI app
 # ---------------------------------------------------------------------------
 
+
 class TestFastAPIApp:
     @pytest.fixture
     def app(self, sample_config):
@@ -323,6 +342,7 @@ class TestFastAPIApp:
     @pytest.fixture
     def client(self, app):
         from starlette.testclient import TestClient
+
         return TestClient(app)
 
     def test_index_returns_html(self, client):
@@ -334,6 +354,7 @@ class TestFastAPIApp:
 
     def test_api_status_endpoint(self, client, sample_config):
         import immich_accelerator.dashboard as d
+
         d._static_hw = {"mem_total_gb": 32.0, "cpus": 10}
         d._cache = {}
         d._cache_ts = 0
@@ -358,6 +379,7 @@ class TestFastAPIApp:
         config_no_key["api_key"] = ""
         app = create_app(config_no_key)
         from starlette.testclient import TestClient
+
         client = TestClient(app)
         resp = client.post("/api/requeue")
         assert resp.status_code == 400
@@ -366,11 +388,12 @@ class TestFastAPIApp:
     def test_api_requeue_with_api_key(self, sample_config):
         app = create_app(sample_config)
         from starlette.testclient import TestClient
+
         client = TestClient(app)
 
         with patch("urllib.request.urlopen") as mock_urlopen:
             mock_resp = MagicMock()
-            mock_resp.read.return_value = b'{}'
+            mock_resp.read.return_value = b"{}"
             mock_resp.__enter__ = lambda s: mock_resp
             mock_resp.__exit__ = MagicMock(return_value=False)
             mock_urlopen.return_value = mock_resp
@@ -388,6 +411,7 @@ class TestFastAPIApp:
     def test_api_requeue_handles_failures(self, sample_config):
         app = create_app(sample_config)
         from starlette.testclient import TestClient
+
         client = TestClient(app)
 
         with patch("urllib.request.urlopen", side_effect=OSError("connection refused")):
@@ -400,13 +424,20 @@ class TestFastAPIApp:
     def test_api_requeue_handles_400_as_ok(self, sample_config):
         """400 from Immich means 'already running' which is fine."""
         import urllib.error
+
         app = create_app(sample_config)
         from starlette.testclient import TestClient
+
         client = TestClient(app)
+
+        from email.message import Message
 
         error = urllib.error.HTTPError(
             url="http://localhost:2283/api/jobs/thumbnailGeneration",
-            code=400, msg="Bad Request", hdrs={}, fp=None,
+            code=400,
+            msg="Bad Request",
+            hdrs=Message(),
+            fp=None,
         )
         with patch("urllib.request.urlopen", side_effect=error):
             resp = client.post("/api/requeue")
@@ -420,13 +451,14 @@ class TestFastAPIApp:
 # TestGetStatusMl
 # ---------------------------------------------------------------------------
 
+
 class TestGetStatusMl:
     def _cfg(self):
-        return {"mode": "ml-only", "ml_host": "0.0.0.0", "ml_port": 3003,
-                "metrics_powermetrics": True}
+        return {"mode": "ml-only", "ml_host": "0.0.0.0", "ml_port": 3003, "metrics_powermetrics": True}
 
     def test_routes_to_ml_status(self):
         import immich_accelerator.dashboard as dash
+
         with patch.object(dash, "get_status_ml", return_value={"mode": "ml-only"}) as m:
             out = dash.get_status(self._cfg())
         assert out == {"mode": "ml-only"}
@@ -434,14 +466,15 @@ class TestGetStatusMl:
 
     def test_ml_status_shape(self):
         import immich_accelerator.dashboard as dash
+
         sample_log = "predict: 1 task(s) [clip] completed in 40ms\n"
-        with patch.object(dash, "_tail_text", return_value=sample_log), \
-             patch.object(dash, "_count_predicts", return_value=5), \
-             patch.object(dash, "_ping_ml", return_value=True), \
-             patch("immich_accelerator.metrics.sample_powermetrics",
-                   return_value={"gpu_residency_pct": 30.0, "ane_mw": 500.0}), \
-             patch.object(dash, "_system_metrics",
-                          return_value={"load_1m": 1.0, "mem_total_gb": 24.0, "cpus": 10}):
+        with (
+            patch.object(dash, "_tail_text", return_value=sample_log),
+            patch.object(dash, "_count_predicts", return_value=5),
+            patch.object(dash, "_ping_ml", return_value=True),
+            patch("immich_accelerator.metrics.sample_powermetrics", return_value={"gpu_residency_pct": 30.0, "ane_mw": 500.0}),
+            patch.object(dash, "_system_metrics", return_value={"load_1m": 1.0, "mem_total_gb": 24.0, "cpus": 10}),
+        ):
             dash._ml_cache = None
             dash._ml_cache_ts = 0
             dash._ml_last_total = 0
@@ -458,13 +491,15 @@ class TestGetStatusMl:
 
     def test_throughput_delta(self):
         import immich_accelerator.dashboard as dash
-        with patch.object(dash, "_tail_text", return_value=""), \
-             patch.object(dash, "_ping_ml", return_value=True), \
-             patch("immich_accelerator.metrics.sample_powermetrics", return_value=None), \
-             patch.object(dash, "_system_metrics",
-                          return_value={"load_1m": 0, "mem_total_gb": 24.0, "cpus": 10}), \
-             patch.object(dash, "_count_predicts", return_value=30), \
-             patch("immich_accelerator.dashboard.time.monotonic", return_value=105.0):
+
+        with (
+            patch.object(dash, "_tail_text", return_value=""),
+            patch.object(dash, "_ping_ml", return_value=True),
+            patch("immich_accelerator.metrics.sample_powermetrics", return_value=None),
+            patch.object(dash, "_system_metrics", return_value={"load_1m": 0, "mem_total_gb": 24.0, "cpus": 10}),
+            patch.object(dash, "_count_predicts", return_value=30),
+            patch("immich_accelerator.dashboard.time.monotonic", return_value=105.0),
+        ):
             dash._ml_cache = None
             dash._ml_cache_ts = 0
             dash._ml_last_total = 10
@@ -473,25 +508,27 @@ class TestGetStatusMl:
         # 20 predicts over 5s = 4.0 req/s
         assert out["ml"]["throughput_rps"] == 4.0
 
-    def test_full_status_carries_mode_field(self, ):
+    def test_full_status_carries_mode_field(
+        self,
+    ):
         import immich_accelerator.dashboard as dash
+
         dash._cache = None
         dash._cache_ts = 0
-        with patch.object(dash, "_query_db", return_value="0|0|0|0|0|0|0"), \
-             patch.object(dash, "_run", return_value=""), \
-             patch("urllib.request.urlopen", side_effect=Exception):
+        with patch.object(dash, "_query_db", return_value="0|0|0|0|0|0|0"), patch.object(dash, "_run", return_value=""), patch("urllib.request.urlopen", side_effect=Exception):
             out = dash.get_status({"mode": "full"})
         assert out["mode"] == "full"
 
     def test_powermetrics_flag_false_when_no_values(self):
         import immich_accelerator.dashboard as dash
-        with patch.object(dash, "_tail_text", return_value=""), \
-             patch.object(dash, "_count_predicts", return_value=0), \
-             patch.object(dash, "_ping_ml", return_value=True), \
-             patch("immich_accelerator.metrics.sample_powermetrics",
-                   return_value={"gpu_residency_pct": None, "ane_mw": None}), \
-             patch.object(dash, "_system_metrics",
-                          return_value={"load_1m": 0, "mem_total_gb": 24.0, "cpus": 10}):
+
+        with (
+            patch.object(dash, "_tail_text", return_value=""),
+            patch.object(dash, "_count_predicts", return_value=0),
+            patch.object(dash, "_ping_ml", return_value=True),
+            patch("immich_accelerator.metrics.sample_powermetrics", return_value={"gpu_residency_pct": None, "ane_mw": None}),
+            patch.object(dash, "_system_metrics", return_value={"load_1m": 0, "mem_total_gb": 24.0, "cpus": 10}),
+        ):
             dash._ml_cache = None
             dash._ml_cache_ts = 0
             dash._ml_last_total = 0

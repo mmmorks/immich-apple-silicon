@@ -1,4 +1,5 @@
 """Tests for immich_accelerator.ml_stats — ML request-log parsing."""
+
 from __future__ import annotations
 
 from immich_accelerator.ml_stats import parse_ml_log
@@ -40,6 +41,7 @@ class TestParseMlLog:
 
     def test_count_predict_lines(self):
         from immich_accelerator.ml_stats import count_predict_lines
+
         lines = [
             "predict: 1 task(s) [clip] completed in 10ms\n",
             "GET /predict\n",

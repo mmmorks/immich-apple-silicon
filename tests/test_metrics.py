@@ -1,4 +1,5 @@
 """Tests for immich_accelerator.metrics — powermetrics plist parsing + sudoers."""
+
 from __future__ import annotations
 
 import plistlib
@@ -106,6 +107,7 @@ class TestSamplePowermetrics:
         assert cmd[2] == str(metrics.POWERMETRICS_WRAPPER)
         # bytes stdout must NOT be decoded by subprocess (text=True absent)
         assert run.call_args.kwargs.get("text") in (None, False)
+        assert result is not None
         assert result["gpu_residency_pct"] == 10.27
         assert result["ane_mw"] == 0.0
 

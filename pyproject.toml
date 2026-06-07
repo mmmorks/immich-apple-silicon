@@ -1,0 +1,96 @@
+# Static-analysis config for the parent repo (the immich-accelerator CLI).
+# This project is NOT a packaged distribution — it ships as a Homebrew
+# formula that runs immich_accelerator/ as a script. There is intentionally
+# no [build-system]/[project] table; this file exists only to hold the
+# ruff + pyright quality-gate config (see CI `lint` job and
+# .pre-commit-config.yaml). The `ml/` submodule is a separate fork with its
+# own pyproject.toml — it is excluded here.
+#
+# Rule philosophy is borrowed from the retirement-calc repo: catch dead code
+# and bugs, not style.
+
+[tool.ruff]
+target-version = "py311"
+extend-exclude = ["ml", ".venv"]
+# The CLI intentionally writes long lines (help text, formatted print
+# statements, compose templates). Don't enforce length.
+line-length = 200
+
+[tool.ruff.lint]
+# Focus: catch dead code and bugs, not style. Pyflakes (F) is the dead-code
+# workhorse — unused imports/vars/redefinitions. Bugbear (B) catches likely
+# bugs. RUF/UP are low-noise modernizations. Skip the broader pycodestyle (E)
+# rules: most are stylistic and would generate churn-only diffs.
+select = [
+    "F",      # pyflakes: unused imports/vars, undefined names, redefinitions
+    "B",      # flake8-bugbear: likely bugs (mutable defaults, etc.)
+    "RUF",    # ruff-specific lints
+    "UP",     # pyupgrade
+    "I",      # isort: import ordering
+    # Security
+    "S",      # flake8-bandit: shell=True, eval/exec, pickle, weak crypto, etc.
+    # Correctness
+    "A",      # flake8-builtins: shadowing list/id/type/etc.
+    "RET",    # flake8-return: unreachable / missing-else / superfluous returns
+    "SIM",    # flake8-simplify: redundant conds, mergeable with, etc.
+    "LOG",    # flake8-logging: misuse of stdlib logging
+    "TRY",    # tryceratops: bare except, raise-vanilla, redundant else
+    # Maintainability / perf
+    "C4",     # flake8-comprehensions: list(genexp), dict([tuples]), etc.
+    "PIE",    # flake8-pie: small correctness / readability checks
+    "PERF",   # perflint: O(n²) antipatterns, list-in-loop
+    "ICN",    # flake8-import-conventions
+    "FURB",   # refurb: low-noise modernizations
+]
+ignore = [
+    "E501",    # line too long (intentional — see line-length note above)
+    "B008",    # function calls in default args (idiomatic in several places)
+    # The CLI prints unicode glyphs deliberately (✓ ✗ → × etc.). These rules
+    # flag every occurrence and would force ASCII-only output.
+    "RUF001",  # ambiguous unicode in strings
+    "RUF002",  # ambiguous unicode in docstrings
+    "RUF003",  # ambiguous unicode in comments
+    "B905",    # zip-without-explicit-strict (truncate-to-shortest is fine here)
+    "TRY003",  # long messages outside the exception class (inline raise is the convention)
+    "TRY400",  # logging.error in except — intentional: user-facing CLI avoids dumping tracebacks
+    "SIM108",  # use ternary instead of if-else (often less readable once wrapped)
+    "SIM300",  # Yoda condition (range checks read better as 0 < x < 1)
+    "SIM102",  # collapsible nested if (the nesting often documents distinct conditions)
+    "TRY300",  # "move to else block" — refactor opinion, not a bug
+    "TRY301",  # "abstract raise to inner function" — usually hurts readability here
+    # --- flake8-bandit rules that are noise-by-design for a deploy/orchestration
+    # CLI. The high-value S rules (S602 shell=True, S301/S302 pickle, S307 eval,
+    # S324 weak hash, S105/S106 hardcoded passwords in prod, S501 verify=False)
+    # stay ENABLED. Secret-leak risk is covered separately by gitleaks.
+    "S101",    # assert (used throughout tests and as sanity invariants)
+    "S104",    # hardcoded bind-all 0.0.0.0 (intentional for the local server)
+    "S108",    # hardcoded /tmp paths (acceptable in a CLI + tests)
+    "S110",    # try-except-pass (intentional best-effort cleanup paths)
+    "S310",    # urlopen (downloads official Immich/asset releases)
+    "S311",    # non-crypto random (used for non-security jitter/ids)
+    "S603",    # subprocess without shell=True check (this tool shells out constantly)
+    "S606",    # start-process-with-no-shell (same)
+    "S607",    # start-process-with-partial-path (relies on PATH for docker/ffmpeg/etc.)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# os.chmod(..., 0o755) makes wrapper scripts/binaries executable — intentional.
+# tarfile.extractall extracts official Immich release tarballs (trusted source).
+"immich_accelerator/__main__.py" = ["S103", "S202"]
+# Tests use hardcoded fake passwords and /tmp fixtures.
+"tests/*.py" = ["S105", "S106"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["immich_accelerator"]
+
+[tool.pyright]
+# Type checking is part of the default quality gate (CI `lint` job).
+# "standard" mode catches the "subtly wrong" diagnostics (incompatible
+# overrides, deprecated APIs, duplicate imports, possibly-unbound, etc.)
+# without requiring blanket annotations across the un-annotated CLI. Stepping
+# up to "strict" would promote reportUnknown*/reportMissingParameterType to
+# errors and fail broadly; defer until annotations are in place.
+include = ["immich_accelerator", "tests", "scripts"]
+exclude = ["**/__pycache__", ".venv", "ml"]
+typeCheckingMode = "standard"
+pythonVersion = "3.11"

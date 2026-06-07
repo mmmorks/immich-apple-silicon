@@ -16,6 +16,7 @@ own API — no user-supplied content is rendered as HTML.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -53,9 +54,7 @@ def _get_accelerator_version() -> str:
 def _run(cmd: list[str], timeout: int = 5, env: dict | None = None) -> str:
     """Run a command and return stdout, or empty string on failure."""
     try:
-        r = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout, env=env
-        )
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
         return r.stdout.strip() if r.returncode == 0 else ""
     except (subprocess.SubprocessError, OSError):
         return ""
@@ -132,13 +131,9 @@ def _query_db(sql: str, config: dict) -> str:
             log.warning("Dashboard: psql not found. Install with: brew install libpq")
         elif host != "localhost":
             log.warning("Dashboard: cannot reach Postgres at %s:%s", host, port)
-            log.warning(
-                "  Check that the port is exposed (not 127.0.0.1) and reachable from this Mac"
-            )
+            log.warning("  Check that the port is exposed (not 127.0.0.1) and reachable from this Mac")
         else:
-            log.warning(
-                "Dashboard: cannot connect to Postgres. Check that Docker is running."
-            )
+            log.warning("Dashboard: cannot connect to Postgres. Check that Docker is running.")
         _db_error_logged = True
     return ""
 
@@ -204,21 +199,15 @@ def get_status(config: dict) -> dict:
     if counts_raw and "|" in counts_raw:
         parts = counts_raw.split("|")
         if len(parts) == 7:
-            try:
-                thumbs, total, clip, faces, ocr, total_videos, encoded_videos = [
-                    int(p) for p in parts
-                ]
-            except ValueError:
-                pass
+            with contextlib.suppress(ValueError):
+                thumbs, total, clip, faces, ocr, total_videos, encoded_videos = [int(p) for p in parts]
 
     # System metrics
     load_raw = _run(["sysctl", "-n", "vm.loadavg"])
     load_1m = 0.0
     if load_raw:
-        try:
+        with contextlib.suppress(ValueError, IndexError):
             load_1m = float(load_raw.strip("{ }").split()[0])
-        except (ValueError, IndexError):
-            pass
 
     # Static hardware info (never changes, cached on first call)
     global _static_hw
@@ -243,9 +232,7 @@ def get_status(config: dict) -> dict:
         import urllib.request as _urlreq2
 
         try:
-            req = _urlreq2.Request(
-                f"{immich_url}/api/jobs", headers={"x-api-key": api_key}
-            )
+            req = _urlreq2.Request(f"{immich_url}/api/jobs", headers={"x-api-key": api_key})
             with _urlreq2.urlopen(req, timeout=5) as r:
                 body = r.read()
                 if not body or not body.strip():
@@ -268,9 +255,7 @@ def get_status(config: dict) -> dict:
             err = str(e)
             # Make common errors human-readable
             if "Expecting value" in err or "empty response" in err:
-                jobs_api_error = (
-                    f"Immich API returned empty response (check immich_url in config)"
-                )
+                jobs_api_error = "Immich API returned empty response (check immich_url in config)"
             elif "401" in err or "403" in err:
                 jobs_api_error = "API key rejected (check api_key in config)"
             elif "Connection refused" in err or "ECONNREFUSED" in err:
@@ -353,6 +338,7 @@ def get_status(config: dict) -> dict:
 
 def _ping_ml(config: dict) -> bool:
     import urllib.request as _urlreq
+
     port = int(config.get("ml_port", 3003))
     try:
         with _urlreq.urlopen(f"http://localhost:{port}/ping", timeout=2) as r:
@@ -379,8 +365,9 @@ def _count_predicts(path: Path) -> int:
     _CACHE_TTL). Needed because the tail window count is not monotonic.
     """
     from .ml_stats import count_predict_lines
+
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
+        with open(path, encoding="utf-8", errors="replace") as f:
             return count_predict_lines(f)
     except OSError:
         return 0
@@ -391,10 +378,8 @@ def _system_metrics() -> dict:
     load_raw = _run(["sysctl", "-n", "vm.loadavg"])
     load_1m = 0.0
     if load_raw:
-        try:
+        with contextlib.suppress(ValueError, IndexError):
             load_1m = float(load_raw.strip("{ }").split()[0])
-        except (ValueError, IndexError):
-            pass
     if _static_hw is None:
         mem_raw = _run(["sysctl", "-n", "hw.memsize"])
         cpu_raw = _run(["sysctl", "-n", "hw.ncpu"])
@@ -417,8 +402,8 @@ def get_status_ml(config: dict) -> dict:
 
     ml_alive = _ping_ml(config)
     log_path = Path.home() / ".immich-accelerator" / "logs" / "ml.log"
-    stats = parse_ml_log(_tail_text(log_path))   # recent tail: tasks + latency
-    cumulative = _count_predicts(log_path)        # monotonic full-file count
+    stats = parse_ml_log(_tail_text(log_path))  # recent tail: tasks + latency
+    cumulative = _count_predicts(log_path)  # monotonic full-file count
 
     rate = 0.0
     if _ml_last_ts and now > _ml_last_ts and cumulative >= _ml_last_total:
@@ -476,12 +461,11 @@ def create_app(config: dict):
     @app.post("/api/requeue")
     async def api_requeue():
         """Trigger 'Run All Missing' for thumbnail, CLIP, faces, and OCR queues."""
-        import urllib.request, urllib.error
+        import urllib.error
+        import urllib.request
 
         if config.get("mode") == "ml-only":
-            return JSONResponse(
-                {"error": "requeue disabled in ml-only mode"}, status_code=400
-            )
+            return JSONResponse({"error": "requeue disabled in ml-only mode"}, status_code=400)
 
         api_key = config.get("api_key", "")
         immich_url = config.get("immich_url", "http://localhost:2283")
@@ -507,7 +491,7 @@ def create_app(config: dict):
                         "Content-Type": "application/json",
                     },
                 )
-                with urllib.request.urlopen(req, timeout=10) as resp:
+                with urllib.request.urlopen(req, timeout=10):
                     results[queue] = "ok"
             except urllib.error.HTTPError as e:
                 # 400 "already running" is fine — job was already queued

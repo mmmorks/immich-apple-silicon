@@ -1,0 +1,26 @@
+# Pre-commit gate for the parent repo (the immich-accelerator CLI).
+# Install once with: pre-commit install
+# Mirrors the CI `lint` job: ruff lint + ruff format + the fast pytest suite.
+#
+# Note: this only covers the parent repo's files. The ml/ submodule is a
+# separate git repo with its own .pre-commit-config.yaml — submodule file
+# changes are committed there, not here.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.16
+    hooks:
+      - id: ruff
+        name: ruff (lint + autofix)
+        args: [--fix]
+      - id: ruff-format
+        name: ruff (format)
+
+  - repo: local
+    hooks:
+      - id: pytest-fast
+        name: pytest (fast — excludes slow integration tests)
+        entry: python -m pytest -q -m "not slow"
+        language: system
+        types: [python]
+        pass_filenames: false
+        always_run: true

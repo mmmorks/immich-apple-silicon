@@ -1,0 +1,19 @@
+title = "immich-apple-silicon gitleaks config"
+
+[extend]
+# Start from gitleaks' built-in rule set, then carve out known false positives.
+useDefault = true
+
+[[allowlists]]
+description = "Test fixtures use synthetic passwords/api-keys, not real secrets"
+paths = [
+    '''tests/.*\.py''',
+    '''ml/tests/.*\.py''',
+]
+
+[[allowlists]]
+description = "Docker compose template / .env use ${VAR} placeholders and runtime-generated tokens (secrets.token_urlsafe), not committed secrets"
+regexes = [
+    '''DB_PASSWORD=\$\{DB_PASSWORD\}''',
+    '''secrets\.token_urlsafe''',
+]

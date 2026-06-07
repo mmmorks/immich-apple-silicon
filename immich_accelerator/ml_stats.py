@@ -13,14 +13,13 @@ NOTE: the leading timestamp/level prefix is produced by the service's
 logger and is ignored here; only the ``predict: ... completed in Nms``
 portion matters. Verify the suffix shape against a real log (Task 13).
 """
+
 from __future__ import annotations
 
 import re
 import statistics
 
-_PREDICT_RE = re.compile(
-    r"predict:\s+\d+\s+task\(s\)\s+\[([^\]]+)\]\s+completed in\s+([\d.]+)\s*ms"
-)
+_PREDICT_RE = re.compile(r"predict:\s+\d+\s+task\(s\)\s+\[([^\]]+)\]\s+completed in\s+([\d.]+)\s*ms")
 
 
 def parse_ml_log(text: str) -> dict:

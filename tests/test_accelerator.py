@@ -6,38 +6,36 @@ import argparse
 import json
 import os
 import signal
-import socket
 import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, mock_open, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from immich_accelerator.__main__ import (
-    find_binary,
-    check_port,
-    is_valid_version,
-    save_config,
-    load_config,
-    write_pid,
-    read_pid,
-    kill_pid,
-    detect_immich,
-    _find_exposed_port,
-    _read_version,
+    CONFIG_FILE,
+    DATA_DIR,
+    LOG_DIR,
+    PID_DIR,
     _build_link_ok,
     _ensure_build_link,
+    _find_exposed_port,
+    _read_version,
     _remove_build_link,
-    SYNTHETIC_CONF,
-    main,
-    cmd_stop,
-    cmd_status,
+    check_port,
     cmd_logs,
+    cmd_status,
+    cmd_stop,
+    detect_immich,
+    find_binary,
+    is_valid_version,
+    kill_pid,
+    load_config,
+    main,
+    read_pid,
+    save_config,
     start_service,
-    DATA_DIR,
-    CONFIG_FILE,
-    PID_DIR,
-    LOG_DIR,
+    write_pid,
 )
 
 # ---------------------------------------------------------------------------
@@ -50,18 +48,14 @@ class TestReadVersion:
         version_file = tmp_path / "VERSION"
         version_file.write_text("1.3.1\n")
         with patch("immich_accelerator.__main__.Path") as mock_path:
-            mock_path.return_value.parent.parent.__truediv__ = (
-                lambda self, x: version_file
-            )
+            mock_path.return_value.parent.parent.__truediv__ = lambda self, x: version_file
             # Direct test: just call the real file logic
             result = version_file.read_text().strip()
             assert result == "1.3.1"
 
     def test_fallback_on_missing_file(self):
         with patch("immich_accelerator.__main__.Path") as mock_path:
-            mock_path.return_value.parent.parent.__truediv__.return_value.read_text.side_effect = (
-                OSError
-            )
+            mock_path.return_value.parent.parent.__truediv__.return_value.read_text.side_effect = OSError
             result = _read_version()
             assert result == "1.0.0"
 
@@ -122,7 +116,7 @@ class TestCheckPort:
             assert check_port("localhost", 9999, "Nothing") is False
 
     def test_returns_false_on_timeout(self):
-        with patch("socket.create_connection", side_effect=socket.timeout("timed out")):
+        with patch("socket.create_connection", side_effect=TimeoutError("timed out")):
             assert check_port("localhost", 9999, "Test") is False
 
 
@@ -275,12 +269,11 @@ class TestPidManagement:
 
     def test_kill_pid_sends_sigterm(self, tmp_data_dir):
         current_pid = os.getpid()
-        with patch(
-            "immich_accelerator.__main__.read_pid", return_value=current_pid
-        ), patch("os.getpgid", return_value=current_pid), patch(
-            "os.killpg"
-        ) as mock_killpg, patch(
-            "os.kill", side_effect=OSError
+        with (
+            patch("immich_accelerator.__main__.read_pid", return_value=current_pid),
+            patch("os.getpgid", return_value=current_pid),
+            patch("os.killpg") as mock_killpg,
+            patch("os.kill", side_effect=OSError),
         ):  # process "gone" immediately
             kill_pid("worker")
             mock_killpg.assert_called_with(current_pid, signal.SIGTERM)
@@ -295,12 +288,8 @@ class TestDetectImmich:
     def test_detects_server_by_image_name(self):
         docker_ps_output = "my-immich\tghcr.io/immich-app/immich-server:v2.6.3\n"
         package_json = json.dumps({"version": "2.6.3"})
-        env_output = (
-            "DB_PASSWORD=secret\nDB_USERNAME=postgres\nDB_DATABASE_NAME=immich\n"
-        )
-        mounts_json = json.dumps(
-            [{"Destination": "/usr/src/app/upload", "Source": "/photos/upload"}]
-        )
+        env_output = "DB_PASSWORD=secret\nDB_USERNAME=postgres\nDB_DATABASE_NAME=immich\n"
+        mounts_json = json.dumps([{"Destination": "/usr/src/app/upload", "Source": "/photos/upload"}])
 
         def run_side_effect(cmd, **kwargs):
             result = MagicMock()
@@ -358,17 +347,15 @@ class TestDetectImmich:
         result = MagicMock()
         result.returncode = 1
         result.stderr = "Docker daemon not running"
-        with patch("subprocess.run", return_value=result):
-            with pytest.raises(RuntimeError, match="Docker not running"):
-                detect_immich("/usr/local/bin/docker")
+        with patch("subprocess.run", return_value=result), pytest.raises(RuntimeError, match="Docker not running"):
+            detect_immich("/usr/local/bin/docker")
 
     def test_raises_when_no_server_found(self):
         result = MagicMock()
         result.returncode = 0
         result.stdout = "some-other-container\tnginx:latest\n"
-        with patch("subprocess.run", return_value=result):
-            with pytest.raises(RuntimeError, match="No Immich server container found"):
-                detect_immich("/usr/local/bin/docker")
+        with patch("subprocess.run", return_value=result), pytest.raises(RuntimeError, match="No Immich server container found"):
+            detect_immich("/usr/local/bin/docker")
 
     def test_version_fallback_to_image_tag(self):
         """When package.json parsing fails, fall back to image tag."""
@@ -413,9 +400,7 @@ class TestFindExposedPort:
         result.returncode = 0
         result.stdout = "0.0.0.0:15432\n"
         with patch("subprocess.run", return_value=result):
-            port = _find_exposed_port(
-                "/usr/local/bin/docker", ["immich_postgres"], "5432"
-            )
+            port = _find_exposed_port("/usr/local/bin/docker", ["immich_postgres"], "5432")
             assert port == "15432"
 
     def test_returns_default_when_not_exposed(self):
@@ -423,9 +408,7 @@ class TestFindExposedPort:
         result.returncode = 1
         result.stdout = ""
         with patch("subprocess.run", return_value=result):
-            port = _find_exposed_port(
-                "/usr/local/bin/docker", ["immich_postgres"], "5432"
-            )
+            port = _find_exposed_port("/usr/local/bin/docker", ["immich_postgres"], "5432")
             assert port == "5432"
 
     def test_tries_multiple_container_names(self):
@@ -444,9 +427,7 @@ class TestFindExposedPort:
             return result
 
         with patch("subprocess.run", side_effect=run_side_effect):
-            port = _find_exposed_port(
-                "/usr/local/bin/docker", ["redis1", "redis2"], "6379"
-            )
+            port = _find_exposed_port("/usr/local/bin/docker", ["redis1", "redis2"], "6379")
             assert port == "6380"
             assert call_count == 2
 
@@ -472,9 +453,7 @@ class TestCLIParsing:
 
     def test_setup_with_api_key(self):
         parser = self._build_parser()
-        args = parser.parse_args(
-            ["setup", "--url", "http://nas:2283", "--api-key", "key123"]
-        )
+        args = parser.parse_args(["setup", "--url", "http://nas:2283", "--api-key", "key123"])
         assert args.api_key == "key123"
 
     def test_setup_manual(self):
@@ -566,9 +545,7 @@ class TestCLIParsing:
         sub.add_parser("stop")
         sub.add_parser("status")
         logs_p = sub.add_parser("logs")
-        logs_p.add_argument(
-            "service", nargs="?", choices=["worker", "ml"], default="worker"
-        )
+        logs_p.add_argument("service", nargs="?", choices=["worker", "ml"], default="worker")
         sub.add_parser("update")
         sub.add_parser("watch")
         dash_p = sub.add_parser("dashboard")
@@ -624,9 +601,7 @@ class TestStartService:
         mock_proc.pid = 12345
         mock_proc.poll.return_value = None  # still running
 
-        with patch("subprocess.Popen", return_value=mock_proc), patch(
-            "immich_accelerator.__main__.write_pid"
-        ) as mock_write, patch("time.sleep"):
+        with patch("subprocess.Popen", return_value=mock_proc), patch("immich_accelerator.__main__.write_pid") as mock_write, patch("time.sleep"):
             pid = start_service("worker", ["node", "main.js"], {}, "/tmp")
             assert pid == 12345
             mock_write.assert_called_once_with("worker", 12345)
@@ -639,11 +614,7 @@ class TestStartService:
         log_file = tmp_data_dir["log_dir"] / "worker.log"
         log_file.write_text("Error: something went wrong\n")
 
-        with patch("subprocess.Popen", return_value=mock_proc), patch(
-            "immich_accelerator.__main__.write_pid"
-        ), patch("time.sleep"), pytest.raises(
-            RuntimeError, match="worker failed to start"
-        ):
+        with patch("subprocess.Popen", return_value=mock_proc), patch("immich_accelerator.__main__.write_pid"), patch("time.sleep"), pytest.raises(RuntimeError, match="worker failed to start"):
             start_service("worker", ["node", "main.js"], {}, "/tmp")
 
 
@@ -666,9 +637,8 @@ class TestBuildLinkOk:
 
             MockPath.side_effect = side_effect
         # Simpler: just mock the target check directly
-        with patch("immich_accelerator.__main__.DATA_DIR", tmp_data_dir["data_dir"]):
-            with patch("pathlib.Path.exists", return_value=False):
-                assert _build_link_ok() is False
+        with patch("immich_accelerator.__main__.DATA_DIR", tmp_data_dir["data_dir"]), patch("pathlib.Path.exists", return_value=False):
+            assert _build_link_ok() is False
 
     def test_returns_true_when_build_resolves_correctly(self, tmp_data_dir):
         """ "/build" resolves to build-data → True."""
@@ -710,21 +680,17 @@ class TestBuildLinkOk:
 class TestEnsureBuildLink:
     def test_returns_true_when_already_ok(self, tmp_data_dir):
         """If _build_link_ok() → True, return immediately."""
-        with patch(
-            "immich_accelerator.__main__._build_link_ok", return_value=True
-        ), patch("immich_accelerator.__main__.DATA_DIR", tmp_data_dir["data_dir"]):
+        with patch("immich_accelerator.__main__._build_link_ok", return_value=True), patch("immich_accelerator.__main__.DATA_DIR", tmp_data_dir["data_dir"]):
             assert _ensure_build_link() is True
 
     def test_returns_false_when_build_exists_wrong_target(self, tmp_data_dir):
         """/build exists but wrong target → warn, return False."""
         (tmp_data_dir["data_dir"] / "build-data").mkdir(exist_ok=True)
-        with patch(
-            "immich_accelerator.__main__._build_link_ok", return_value=False
-        ), patch(
-            "immich_accelerator.__main__.DATA_DIR", tmp_data_dir["data_dir"]
-        ), patch(
-            "immich_accelerator.__main__.Path"
-        ) as MockPath:
+        with (
+            patch("immich_accelerator.__main__._build_link_ok", return_value=False),
+            patch("immich_accelerator.__main__.DATA_DIR", tmp_data_dir["data_dir"]),
+            patch("immich_accelerator.__main__.Path") as MockPath,
+        ):
             mock_build = MagicMock()
             mock_build.exists.return_value = True
             MockPath.side_effect = lambda p: mock_build if p == "/build" else Path(p)
@@ -735,15 +701,12 @@ class TestEnsureBuildLink:
         (tmp_data_dir["data_dir"] / "build-data").mkdir(exist_ok=True)
         synth_file = tmp_data_dir["data_dir"] / "synthetic-conf"
         synth_file.write_text("build\tUsers/test\n")
-        with patch(
-            "immich_accelerator.__main__._build_link_ok", return_value=False
-        ), patch(
-            "immich_accelerator.__main__.DATA_DIR", tmp_data_dir["data_dir"]
-        ), patch(
-            "immich_accelerator.__main__.SYNTHETIC_CONF", synth_file
-        ), patch(
-            "immich_accelerator.__main__.Path"
-        ) as MockPath:
+        with (
+            patch("immich_accelerator.__main__._build_link_ok", return_value=False),
+            patch("immich_accelerator.__main__.DATA_DIR", tmp_data_dir["data_dir"]),
+            patch("immich_accelerator.__main__.SYNTHETIC_CONF", synth_file),
+            patch("immich_accelerator.__main__.Path") as MockPath,
+        ):
             mock_build = MagicMock()
             mock_build.exists.return_value = False
             MockPath.side_effect = lambda p: mock_build if p == "/build" else Path(p)
@@ -753,16 +716,12 @@ class TestEnsureBuildLink:
         """User says 'n' → return False, no sudo."""
         (tmp_data_dir["data_dir"] / "build-data").mkdir(exist_ok=True)
         synth_file = tmp_data_dir["data_dir"] / "synthetic-conf"
-        with patch(
-            "immich_accelerator.__main__._build_link_ok", return_value=False
-        ), patch(
-            "immich_accelerator.__main__.DATA_DIR", tmp_data_dir["data_dir"]
-        ), patch(
-            "immich_accelerator.__main__.SYNTHETIC_CONF", synth_file
-        ), patch(
-            "immich_accelerator.__main__.Path"
-        ) as MockPath, patch(
-            "builtins.input", return_value="n"
+        with (
+            patch("immich_accelerator.__main__._build_link_ok", return_value=False),
+            patch("immich_accelerator.__main__.DATA_DIR", tmp_data_dir["data_dir"]),
+            patch("immich_accelerator.__main__.SYNTHETIC_CONF", synth_file),
+            patch("immich_accelerator.__main__.Path") as MockPath,
+            patch("builtins.input", return_value="n"),
         ):
             mock_build = MagicMock()
             mock_build.exists.return_value = False
@@ -783,9 +742,7 @@ class TestRemoveBuildLink:
         synth_file.write_text("build\tUsers/test\n")
         mock_result = MagicMock()
         mock_result.returncode = 0
-        with patch("immich_accelerator.__main__.SYNTHETIC_CONF", synth_file), patch(
-            "subprocess.run", return_value=mock_result
-        ) as mock_run:
+        with patch("immich_accelerator.__main__.SYNTHETIC_CONF", synth_file), patch("subprocess.run", return_value=mock_result) as mock_run:
             _remove_build_link()
             mock_run.assert_called_once()
             args = mock_run.call_args[0][0]
@@ -821,30 +778,22 @@ class TestPathConstants:
 
 class TestMainDispatch:
     def test_stop_dispatches(self):
-        with patch("sys.argv", ["prog", "stop"]), patch(
-            "immich_accelerator.__main__.cmd_stop"
-        ) as mock:
+        with patch("sys.argv", ["prog", "stop"]), patch("immich_accelerator.__main__.cmd_stop") as mock:
             main()
             mock.assert_called_once()
 
     def test_status_dispatches(self):
-        with patch("sys.argv", ["prog", "status"]), patch(
-            "immich_accelerator.__main__.cmd_status"
-        ) as mock:
+        with patch("sys.argv", ["prog", "status"]), patch("immich_accelerator.__main__.cmd_status") as mock:
             main()
             mock.assert_called_once()
 
     def test_runtime_error_exits(self):
-        with patch("sys.argv", ["prog", "start"]), patch(
-            "immich_accelerator.__main__.cmd_start", side_effect=RuntimeError("boom")
-        ), pytest.raises(SystemExit) as exc:
+        with patch("sys.argv", ["prog", "start"]), patch("immich_accelerator.__main__.cmd_start", side_effect=RuntimeError("boom")), pytest.raises(SystemExit) as exc:
             main()
         assert exc.value.code == 1
 
     def test_keyboard_interrupt_handled(self):
-        with patch("sys.argv", ["prog", "stop"]), patch(
-            "immich_accelerator.__main__.cmd_stop", side_effect=KeyboardInterrupt
-        ):
+        with patch("sys.argv", ["prog", "stop"]), patch("immich_accelerator.__main__.cmd_stop", side_effect=KeyboardInterrupt):
             main()  # Should not raise
 
 
@@ -859,32 +808,28 @@ class TestPowermetricsInstaller:
             calls.append(cmd)
             return MagicMock(returncode=0, stderr="", stdout="")
 
-        with patch("immich_accelerator.__main__.subprocess.run", side_effect=fake_run), \
-             patch("immich_accelerator.__main__.getpass.getuser", return_value="bob"):
+        with patch("immich_accelerator.__main__.subprocess.run", side_effect=fake_run), patch("immich_accelerator.__main__.getpass.getuser", return_value="bob"):
             ok = _install_powermetrics_sudoers()
 
         assert ok is True
         # visudo -cf must run before any `install` of the sudoers file
         joined = [" ".join(map(str, c)) for c in calls]
         visudo_idx = next(i for i, c in enumerate(joined) if "visudo -cf" in c)
-        install_sudoers_idx = next(
-            i for i, c in enumerate(joined)
-            if "install" in c and str(metrics.POWERMETRICS_SUDOERS) in c
-        )
+        install_sudoers_idx = next(i for i, c in enumerate(joined) if "install" in c and str(metrics.POWERMETRICS_SUDOERS) in c)
         assert visudo_idx < install_sudoers_idx
 
     def test_aborts_when_visudo_fails(self):
         from immich_accelerator.__main__ import _install_powermetrics_sudoers
 
         calls = []
+
         def fake_run(cmd, *a, **k):
             calls.append(cmd)
             if "visudo" in cmd:
                 return MagicMock(returncode=1, stderr="bad", stdout="")
             return MagicMock(returncode=0, stderr="", stdout="")
 
-        with patch("immich_accelerator.__main__.subprocess.run", side_effect=fake_run), \
-             patch("immich_accelerator.__main__.getpass.getuser", return_value="bob"):
+        with patch("immich_accelerator.__main__.subprocess.run", side_effect=fake_run), patch("immich_accelerator.__main__.getpass.getuser", return_value="bob"):
             assert _install_powermetrics_sudoers() is False
         assert not any("install" in " ".join(map(str, c)) for c in calls)
 
@@ -893,8 +838,7 @@ class TestPowermetricsInstaller:
         from immich_accelerator.__main__ import _remove_powermetrics_sudoers
 
         removed = []
-        with patch("immich_accelerator.__main__.subprocess.run",
-                   side_effect=lambda cmd, *a, **k: removed.append(cmd) or MagicMock(returncode=0)):
+        with patch("immich_accelerator.__main__.subprocess.run", side_effect=lambda cmd, *a, **k: removed.append(cmd) or MagicMock(returncode=0)):
             _remove_powermetrics_sudoers()
         targets = [c[-1] for c in removed]
         assert str(metrics.POWERMETRICS_SUDOERS) in targets
@@ -917,8 +861,8 @@ class TestLanIp:
 
     def test_returns_none_when_no_address(self):
         from immich_accelerator.__main__ import _detect_lan_ip
-        with patch("immich_accelerator.__main__.subprocess.run",
-                   return_value=MagicMock(returncode=1, stdout="")):
+
+        with patch("immich_accelerator.__main__.subprocess.run", return_value=MagicMock(returncode=1, stdout="")):
             assert _detect_lan_ip() is None
 
 
@@ -926,16 +870,13 @@ class TestSetupMlOnly:
     def test_writes_minimal_ml_only_config(self, tmp_data_dir):
         from immich_accelerator.__main__ import _setup_ml_only, load_config
 
-        args = argparse.Namespace(ml_only=True, port=3003, host="0.0.0.0",
-                                  url=None, api_key=None, manual=False,
-                                  import_server=None)
-        with patch("immich_accelerator.__main__._find_ml_dir",
-                   return_value=Path("/Users/test/ml")), \
-             patch("immich_accelerator.__main__._install_powermetrics_sudoers",
-                   return_value=True), \
-             patch("immich_accelerator.__main__._offer_launchd_service",
-                   return_value=False) as offer, \
-             patch("immich_accelerator.__main__._print_nas_wiring"):
+        args = argparse.Namespace(ml_only=True, port=3003, host="0.0.0.0", url=None, api_key=None, manual=False, import_server=None)
+        with (
+            patch("immich_accelerator.__main__._find_ml_dir", return_value=Path("/Users/test/ml")),
+            patch("immich_accelerator.__main__._install_powermetrics_sudoers", return_value=True),
+            patch("immich_accelerator.__main__._offer_launchd_service", return_value=False) as offer,
+            patch("immich_accelerator.__main__._print_nas_wiring"),
+        ):
             _setup_ml_only(args)
         offer.assert_called_once()  # ml-only setup offers launchd auto-start
 
@@ -952,16 +893,13 @@ class TestSetupMlOnly:
     def test_disables_metrics_when_sudoers_fails(self, tmp_data_dir):
         from immich_accelerator.__main__ import _setup_ml_only, load_config
 
-        args = argparse.Namespace(ml_only=True, port=3003, host="0.0.0.0",
-                                  url=None, api_key=None, manual=False,
-                                  import_server=None)
-        with patch("immich_accelerator.__main__._find_ml_dir",
-                   return_value=Path("/Users/test/ml")), \
-             patch("immich_accelerator.__main__._install_powermetrics_sudoers",
-                   return_value=False), \
-             patch("immich_accelerator.__main__._offer_launchd_service",
-                   return_value=False), \
-             patch("immich_accelerator.__main__._print_nas_wiring"):
+        args = argparse.Namespace(ml_only=True, port=3003, host="0.0.0.0", url=None, api_key=None, manual=False, import_server=None)
+        with (
+            patch("immich_accelerator.__main__._find_ml_dir", return_value=Path("/Users/test/ml")),
+            patch("immich_accelerator.__main__._install_powermetrics_sudoers", return_value=False),
+            patch("immich_accelerator.__main__._offer_launchd_service", return_value=False),
+            patch("immich_accelerator.__main__._print_nas_wiring"),
+        ):
             _setup_ml_only(args)
 
         assert load_config()["metrics_powermetrics"] is False
@@ -969,28 +907,21 @@ class TestSetupMlOnly:
     def test_cmd_setup_dispatches_to_ml_only(self, tmp_data_dir):
         from immich_accelerator.__main__ import cmd_setup
 
-        args = argparse.Namespace(ml_only=True, port=3003, host="0.0.0.0",
-                                  url=None, api_key=None, manual=False,
-                                  import_server=None)
+        args = argparse.Namespace(ml_only=True, port=3003, host="0.0.0.0", url=None, api_key=None, manual=False, import_server=None)
         with patch("immich_accelerator.__main__._setup_ml_only") as m:
             cmd_setup(args)
         m.assert_called_once_with(args)
 
     def test_raises_when_ml_dir_unavailable(self, tmp_data_dir):
         from immich_accelerator.__main__ import _setup_ml_only
-        args = argparse.Namespace(ml_only=True, port=3003, host="0.0.0.0",
-                                  url=None, api_key=None, manual=False,
-                                  import_server=None)
-        with patch("immich_accelerator.__main__._find_ml_dir", return_value=None):
-            with pytest.raises(RuntimeError):
-                _setup_ml_only(args)
+
+        args = argparse.Namespace(ml_only=True, port=3003, host="0.0.0.0", url=None, api_key=None, manual=False, import_server=None)
+        with patch("immich_accelerator.__main__._find_ml_dir", return_value=None), pytest.raises(RuntimeError):
+            _setup_ml_only(args)
 
 
 class TestLaunchdService:
-    _TEMPLATE = (
-        "<plist><string>/opt/homebrew/bin/python3</string>"
-        "<string>/path/to/immich-apple-silicon</string></plist>\n"
-    )
+    _TEMPLATE = "<plist><string>/opt/homebrew/bin/python3</string><string>/path/to/immich-apple-silicon</string></plist>\n"
 
     def _src(self, tmp_path):
         src = tmp_path / "tmpl.plist"
@@ -999,49 +930,61 @@ class TestLaunchdService:
 
     def test_brew_install_defers_to_brew_services(self, tmp_path):
         from immich_accelerator.__main__ import _offer_launchd_service
+
         dst = tmp_path / "out.plist"
-        with patch("immich_accelerator.__main__._is_brew_install", return_value=True), \
-             patch("immich_accelerator.__main__.LAUNCHD_PLIST_SRC", self._src(tmp_path)), \
-             patch("immich_accelerator.__main__.LAUNCHD_PLIST_DST", dst):
+        with (
+            patch("immich_accelerator.__main__._is_brew_install", return_value=True),
+            patch("immich_accelerator.__main__.LAUNCHD_PLIST_SRC", self._src(tmp_path)),
+            patch("immich_accelerator.__main__.LAUNCHD_PLIST_DST", dst),
+        ):
             assert _offer_launchd_service() is False
         assert not dst.exists()
 
     def test_installs_and_loads_when_accepted(self, tmp_path):
-        from immich_accelerator.__main__ import _offer_launchd_service
         import sys as _sys
+
+        from immich_accelerator.__main__ import _offer_launchd_service
+
         dst = tmp_path / "LaunchAgents" / "out.plist"
         runs = []
-        with patch("immich_accelerator.__main__._is_brew_install", return_value=False), \
-             patch("immich_accelerator.__main__.LAUNCHD_PLIST_SRC", self._src(tmp_path)), \
-             patch("immich_accelerator.__main__.LAUNCHD_PLIST_DST", dst), \
-             patch("builtins.input", return_value="y"), \
-             patch("immich_accelerator.__main__.subprocess.run",
-                   side_effect=lambda cmd, *a, **k: runs.append(cmd) or MagicMock(returncode=0)):
+        with (
+            patch("immich_accelerator.__main__._is_brew_install", return_value=False),
+            patch("immich_accelerator.__main__.LAUNCHD_PLIST_SRC", self._src(tmp_path)),
+            patch("immich_accelerator.__main__.LAUNCHD_PLIST_DST", dst),
+            patch("builtins.input", return_value="y"),
+            patch("immich_accelerator.__main__.subprocess.run", side_effect=lambda cmd, *a, **k: runs.append(cmd) or MagicMock(returncode=0)),
+        ):
             assert _offer_launchd_service() is True
         content = dst.read_text()
         assert "/path/to/immich-apple-silicon" not in content  # repo dir substituted
-        assert "/opt/homebrew/bin/python3" not in content      # python path substituted
+        assert "/opt/homebrew/bin/python3" not in content  # python path substituted
         assert _sys.executable in content
         assert any(c[:2] == ["launchctl", "load"] for c in runs)
 
     def test_declined_does_not_install(self, tmp_path):
         from immich_accelerator.__main__ import _offer_launchd_service
+
         dst = tmp_path / "out.plist"
-        with patch("immich_accelerator.__main__._is_brew_install", return_value=False), \
-             patch("immich_accelerator.__main__.LAUNCHD_PLIST_SRC", self._src(tmp_path)), \
-             patch("immich_accelerator.__main__.LAUNCHD_PLIST_DST", dst), \
-             patch("builtins.input", return_value="n"):
+        with (
+            patch("immich_accelerator.__main__._is_brew_install", return_value=False),
+            patch("immich_accelerator.__main__.LAUNCHD_PLIST_SRC", self._src(tmp_path)),
+            patch("immich_accelerator.__main__.LAUNCHD_PLIST_DST", dst),
+            patch("builtins.input", return_value="n"),
+        ):
             assert _offer_launchd_service() is False
         assert not dst.exists()
 
     def test_already_installed_is_noop(self, tmp_path):
         from immich_accelerator.__main__ import _offer_launchd_service
+
         dst = tmp_path / "out.plist"
         dst.write_text("existing")
-        with patch("immich_accelerator.__main__._is_brew_install", return_value=False), \
-             patch("immich_accelerator.__main__.LAUNCHD_PLIST_SRC", self._src(tmp_path)), \
-             patch("immich_accelerator.__main__.LAUNCHD_PLIST_DST", dst), \
-             patch("builtins.input", side_effect=AssertionError("should not prompt")):
+        with (
+            patch("immich_accelerator.__main__._is_brew_install", return_value=False),
+            patch("immich_accelerator.__main__.LAUNCHD_PLIST_SRC", self._src(tmp_path)),
+            patch("immich_accelerator.__main__.LAUNCHD_PLIST_DST", dst),
+            patch("builtins.input", side_effect=AssertionError("should not prompt")),
+        ):
             assert _offer_launchd_service() is False
         assert dst.read_text() == "existing"  # untouched
 
@@ -1055,21 +998,23 @@ class TestStartMlOnly:
 
     def test_cmd_start_dispatches_to_ml_only(self, tmp_data_dir, tmp_path):
         from immich_accelerator.__main__ import cmd_start, save_config
-        save_config({"mode": "ml-only", "ml_dir": str(tmp_path / "ml"),
-                     "ml_host": "0.0.0.0", "ml_port": 3003})
+
+        save_config({"mode": "ml-only", "ml_dir": str(tmp_path / "ml"), "ml_host": "0.0.0.0", "ml_port": 3003})
         with patch("immich_accelerator.__main__._start_ml_only") as m:
             cmd_start(argparse.Namespace(force=False))
         assert m.call_count == 1
 
     def test_start_ml_only_launches_with_ml_env(self, tmp_data_dir, tmp_path):
         from immich_accelerator.__main__ import _start_ml_only
+
         ml = self._make_ml_dir(tmp_path)
-        config = {"mode": "ml-only", "ml_dir": str(ml),
-                  "ml_host": "0.0.0.0", "ml_port": 3055}
-        with patch("immich_accelerator.__main__._kill_stale_processes"), \
-             patch("immich_accelerator.__main__.read_pid", return_value=None), \
-             patch("immich_accelerator.__main__._ensure_dashboard_running"), \
-             patch("immich_accelerator.__main__.start_service", return_value=4242) as ss:
+        config = {"mode": "ml-only", "ml_dir": str(ml), "ml_host": "0.0.0.0", "ml_port": 3055}
+        with (
+            patch("immich_accelerator.__main__._kill_stale_processes"),
+            patch("immich_accelerator.__main__.read_pid", return_value=None),
+            patch("immich_accelerator.__main__._ensure_dashboard_running"),
+            patch("immich_accelerator.__main__.start_service", return_value=4242) as ss,
+        ):
             _start_ml_only(config, argparse.Namespace(force=False))
         name, cmd, env, cwd = ss.call_args[0]
         assert name == "ml"
@@ -1080,37 +1025,45 @@ class TestStartMlOnly:
 
     def test_start_ml_only_force_restarts(self, tmp_data_dir, tmp_path):
         from immich_accelerator.__main__ import _start_ml_only
+
         ml = self._make_ml_dir(tmp_path)
         config = {"mode": "ml-only", "ml_dir": str(ml), "ml_host": "0.0.0.0", "ml_port": 3003}
-        with patch("immich_accelerator.__main__._kill_stale_processes"), \
-             patch("immich_accelerator.__main__.read_pid", return_value=999), \
-             patch("immich_accelerator.__main__.kill_pid") as kp, \
-             patch("immich_accelerator.__main__._ensure_dashboard_running"), \
-             patch("immich_accelerator.__main__.start_service", return_value=1):
+        with (
+            patch("immich_accelerator.__main__._kill_stale_processes"),
+            patch("immich_accelerator.__main__.read_pid", return_value=999),
+            patch("immich_accelerator.__main__.kill_pid") as kp,
+            patch("immich_accelerator.__main__._ensure_dashboard_running"),
+            patch("immich_accelerator.__main__.start_service", return_value=1),
+        ):
             _start_ml_only(config, argparse.Namespace(force=True))
         kp.assert_called_once_with("ml")
 
     def test_start_ml_only_raises_when_venv_missing(self, tmp_data_dir, tmp_path):
         from immich_accelerator.__main__ import _start_ml_only
-        config = {"mode": "ml-only", "ml_dir": str(tmp_path / "nope"),
-                  "ml_host": "0.0.0.0", "ml_port": 3003}
-        with patch("immich_accelerator.__main__._kill_stale_processes"), \
-             patch("immich_accelerator.__main__.read_pid", return_value=None), \
-             patch("immich_accelerator.__main__._find_ml_dir", return_value=None), \
-             patch("immich_accelerator.__main__._ensure_dashboard_running"):
-            with pytest.raises(RuntimeError):
-                _start_ml_only(config, argparse.Namespace(force=False))
+
+        config = {"mode": "ml-only", "ml_dir": str(tmp_path / "nope"), "ml_host": "0.0.0.0", "ml_port": 3003}
+        with (
+            patch("immich_accelerator.__main__._kill_stale_processes"),
+            patch("immich_accelerator.__main__.read_pid", return_value=None),
+            patch("immich_accelerator.__main__._find_ml_dir", return_value=None),
+            patch("immich_accelerator.__main__._ensure_dashboard_running"),
+            pytest.raises(RuntimeError),
+        ):
+            _start_ml_only(config, argparse.Namespace(force=False))
 
 
 class TestUninstallPowermetrics:
     def test_uninstall_removes_powermetrics(self, tmp_data_dir, monkeypatch):
         from immich_accelerator.__main__ import cmd_uninstall
+
         monkeypatch.setattr("builtins.input", lambda *_: "y")
-        with patch("immich_accelerator.__main__.cmd_stop"), \
-             patch("immich_accelerator.__main__._remove_build_link"), \
-             patch("immich_accelerator.__main__._rmtree_or_explain", return_value=True), \
-             patch("immich_accelerator.__main__.subprocess.run", return_value=MagicMock(returncode=0, stdout="")), \
-             patch("immich_accelerator.__main__._remove_powermetrics_sudoers") as rm:
+        with (
+            patch("immich_accelerator.__main__.cmd_stop"),
+            patch("immich_accelerator.__main__._remove_build_link"),
+            patch("immich_accelerator.__main__._rmtree_or_explain", return_value=True),
+            patch("immich_accelerator.__main__.subprocess.run", return_value=MagicMock(returncode=0, stdout="")),
+            patch("immich_accelerator.__main__._remove_powermetrics_sudoers") as rm,
+        ):
             cmd_uninstall(None)
         rm.assert_called_once()
 
@@ -1118,6 +1071,7 @@ class TestUninstallPowermetrics:
 class TestMlOnlyCommands:
     def test_watch_dispatches_to_ml_only(self, tmp_data_dir):
         from immich_accelerator.__main__ import cmd_watch, save_config
+
         save_config({"mode": "ml-only", "ml_dir": "/x", "ml_port": 3003})
         with patch("immich_accelerator.__main__._watch_ml_only") as m:
             cmd_watch(None)
@@ -1125,17 +1079,19 @@ class TestMlOnlyCommands:
 
     def test_status_ml_only_reports_endpoint(self, tmp_data_dir, capsys, caplog):
         import logging
+
         from immich_accelerator.__main__ import cmd_status, save_config
+
         save_config({"mode": "ml-only", "ml_host": "0.0.0.0", "ml_port": 3003})
-        with patch("immich_accelerator.__main__.read_pid", return_value=1234), \
-             caplog.at_level(logging.INFO):
+        with patch("immich_accelerator.__main__.read_pid", return_value=1234), caplog.at_level(logging.INFO):
             cmd_status(None)
         text = caplog.text
         assert "ml-only" in text
         assert "3003" in text
 
     def test_logs_defaults_to_ml_in_ml_only(self, tmp_data_dir, capsys):
-        from immich_accelerator.__main__ import cmd_logs, save_config
+        from immich_accelerator.__main__ import save_config
+
         save_config({"mode": "ml-only", "ml_port": 3003})
         with patch("immich_accelerator.__main__.os.execvp") as ex:
             cmd_logs(argparse.Namespace(service=None))
@@ -1146,6 +1102,7 @@ class TestMlOnlyCommands:
 class TestUpdateMlOnly:
     def test_update_noop_in_ml_only(self, tmp_data_dir):
         from immich_accelerator.__main__ import cmd_update, save_config
+
         save_config({"mode": "ml-only", "ml_port": 3003})
         with patch("immich_accelerator.__main__.find_docker") as fd:
             cmd_update(None)
@@ -1168,47 +1125,39 @@ class TestFindMlDirRequirementsDrift:
         return ml
 
     def test_returns_ml_dir_without_pip_when_marker_matches(self, tmp_path):
-        from immich_accelerator.__main__ import (
-            _find_ml_dir, _requirements_marker, _hash_file)
+        from immich_accelerator.__main__ import _find_ml_dir, _hash_file, _requirements_marker
+
         ml = self._make_ml_dir(tmp_path)
         _requirements_marker(ml).write_text(_hash_file(ml / "requirements.txt"))
-        with patch("immich_accelerator.__main__._ml_dir_candidates", return_value=[ml]), \
-             patch("immich_accelerator.__main__.subprocess.run") as run:
+        with patch("immich_accelerator.__main__._ml_dir_candidates", return_value=[ml]), patch("immich_accelerator.__main__.subprocess.run") as run:
             assert _find_ml_dir() == ml
         run.assert_not_called()  # fast path: no reinstall when hash is current
 
     def test_reinstalls_when_marker_missing(self, tmp_path):
-        from immich_accelerator.__main__ import (
-            _find_ml_dir, _requirements_marker, _hash_file)
+        from immich_accelerator.__main__ import _find_ml_dir, _hash_file, _requirements_marker
+
         ml = self._make_ml_dir(tmp_path)  # no marker written
-        with patch("immich_accelerator.__main__._ml_dir_candidates", return_value=[ml]), \
-             patch("immich_accelerator.__main__.subprocess.run",
-                   return_value=MagicMock(returncode=0)) as run:
+        with patch("immich_accelerator.__main__._ml_dir_candidates", return_value=[ml]), patch("immich_accelerator.__main__.subprocess.run", return_value=MagicMock(returncode=0)) as run:
             assert _find_ml_dir() == ml
         run.assert_called_once()
-        assert _requirements_marker(ml).read_text().strip() == \
-            _hash_file(ml / "requirements.txt")
+        assert _requirements_marker(ml).read_text().strip() == _hash_file(ml / "requirements.txt")
 
     def test_reinstalls_when_marker_stale(self, tmp_path):
-        from immich_accelerator.__main__ import (
-            _find_ml_dir, _requirements_marker, _hash_file)
+        from immich_accelerator.__main__ import _find_ml_dir, _hash_file, _requirements_marker
+
         ml = self._make_ml_dir(tmp_path)
         _requirements_marker(ml).write_text("deadbeef")
-        with patch("immich_accelerator.__main__._ml_dir_candidates", return_value=[ml]), \
-             patch("immich_accelerator.__main__.subprocess.run",
-                   return_value=MagicMock(returncode=0)) as run:
+        with patch("immich_accelerator.__main__._ml_dir_candidates", return_value=[ml]), patch("immich_accelerator.__main__.subprocess.run", return_value=MagicMock(returncode=0)) as run:
             assert _find_ml_dir() == ml
         run.assert_called_once()
-        assert _requirements_marker(ml).read_text().strip() == \
-            _hash_file(ml / "requirements.txt")
+        assert _requirements_marker(ml).read_text().strip() == _hash_file(ml / "requirements.txt")
 
     def test_returns_ml_dir_but_keeps_stale_marker_when_reinstall_fails(self, tmp_path):
         from immich_accelerator.__main__ import _find_ml_dir, _requirements_marker
+
         ml = self._make_ml_dir(tmp_path)
         _requirements_marker(ml).write_text("deadbeef")
-        with patch("immich_accelerator.__main__._ml_dir_candidates", return_value=[ml]), \
-             patch("immich_accelerator.__main__.subprocess.run",
-                   return_value=MagicMock(returncode=1)) as run:
+        with patch("immich_accelerator.__main__._ml_dir_candidates", return_value=[ml]), patch("immich_accelerator.__main__.subprocess.run", return_value=MagicMock(returncode=1)) as run:
             # ML stays available on the old deps rather than going dark
             assert _find_ml_dir() == ml
         run.assert_called_once()
@@ -1220,11 +1169,13 @@ class TestFindMlDirRequirementsDrift:
         # subprocess.run then raises TimeoutExpired — this must NOT propagate
         # out of _find_ml_dir and crash ML startup; we fall back to old deps.
         from immich_accelerator.__main__ import _find_ml_dir, _requirements_marker
+
         ml = self._make_ml_dir(tmp_path)
         _requirements_marker(ml).write_text("deadbeef")
-        with patch("immich_accelerator.__main__._ml_dir_candidates", return_value=[ml]), \
-             patch("immich_accelerator.__main__.subprocess.run",
-                   side_effect=subprocess.TimeoutExpired(cmd="pip", timeout=600)) as run:
+        with (
+            patch("immich_accelerator.__main__._ml_dir_candidates", return_value=[ml]),
+            patch("immich_accelerator.__main__.subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="pip", timeout=600)) as run,
+        ):
             # ML stays available on the old deps rather than going dark
             assert _find_ml_dir() == ml
         run.assert_called_once()
@@ -1235,18 +1186,17 @@ class TestFindMlDirRequirementsDrift:
         # A broken pip shim (ENOEXEC) or missing interpreter raises OSError out
         # of subprocess.run; same fallback contract — keep ML on old deps.
         from immich_accelerator.__main__ import _find_ml_dir, _requirements_marker
+
         ml = self._make_ml_dir(tmp_path)
         _requirements_marker(ml).write_text("deadbeef")
-        with patch("immich_accelerator.__main__._ml_dir_candidates", return_value=[ml]), \
-             patch("immich_accelerator.__main__.subprocess.run",
-                   side_effect=OSError("Exec format error")) as run:
+        with patch("immich_accelerator.__main__._ml_dir_candidates", return_value=[ml]), patch("immich_accelerator.__main__.subprocess.run", side_effect=OSError("Exec format error")) as run:
             assert _find_ml_dir() == ml
         run.assert_called_once()
         assert _requirements_marker(ml).read_text().strip() == "deadbeef"
 
     def test_fresh_venv_creation_writes_marker(self, tmp_path):
-        from immich_accelerator.__main__ import (
-            _find_ml_dir, _requirements_marker, _hash_file)
+        from immich_accelerator.__main__ import _find_ml_dir, _hash_file, _requirements_marker
+
         ml = self._make_ml_dir(tmp_path, with_venv=False)
 
         def fake_run(cmd, *a, **k):
@@ -1255,10 +1205,11 @@ class TestFindMlDirRequirementsDrift:
             (ml / "venv" / "bin" / "pip").write_text("#!/bin/sh")
             return MagicMock(returncode=0, stderr="")
 
-        with patch("immich_accelerator.__main__._ml_dir_candidates", return_value=[ml]), \
-             patch("immich_accelerator.__main__._find_python", return_value="/usr/bin/python3"), \
-             patch("builtins.input", return_value="y"), \
-             patch("immich_accelerator.__main__.subprocess.run", side_effect=fake_run):
+        with (
+            patch("immich_accelerator.__main__._ml_dir_candidates", return_value=[ml]),
+            patch("immich_accelerator.__main__._find_python", return_value="/usr/bin/python3"),
+            patch("builtins.input", return_value="y"),
+            patch("immich_accelerator.__main__.subprocess.run", side_effect=fake_run),
+        ):
             assert _find_ml_dir() == ml
-        assert _requirements_marker(ml).read_text().strip() == \
-            _hash_file(ml / "requirements.txt")
+        assert _requirements_marker(ml).read_text().strip() == _hash_file(ml / "requirements.txt")

@@ -15,16 +15,14 @@ from __future__ import annotations
 import subprocess
 import venv
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from unittest.mock import patch, MagicMock
-
 from immich_accelerator.__main__ import (
-    SUPPORTED_NODE_MAJORS,
-    _COMPOSE_TEMPLATE,
     _STALE_ML_RE,
     _STALE_WORKER_RE,
+    SUPPORTED_NODE_MAJORS,
     _check_node_engines_compat,
     _has_everything,
     _kill_stale_processes,
@@ -130,16 +128,12 @@ class TestDashboardDependenciesAreAvailable:
     def test_fastapi_pinned_in_ml_requirements(self):
         reqs = (REPO_ROOT / "ml" / "requirements.txt").read_text().lower()
         assert "fastapi" in reqs, (
-            "fastapi must stay in ml/requirements.txt — the Homebrew "
-            "formula wrapper uses the ML venv's Python and the dashboard "
-            "imports fastapi lazily. Removing it breaks issue #17."
+            "fastapi must stay in ml/requirements.txt — the Homebrew formula wrapper uses the ML venv's Python and the dashboard imports fastapi lazily. Removing it breaks issue #17."
         )
 
     def test_uvicorn_pinned_in_ml_requirements(self):
         reqs = (REPO_ROOT / "ml" / "requirements.txt").read_text().lower()
-        assert (
-            "uvicorn" in reqs
-        ), "uvicorn must stay in ml/requirements.txt — see fastapi test above."
+        assert "uvicorn" in reqs, "uvicorn must stay in ml/requirements.txt — see fastapi test above."
 
     def test_dashboard_module_top_level_imports_only_stdlib(self):
         """Top-level imports of dashboard.py must never reach third-party
@@ -151,6 +145,7 @@ class TestDashboardDependenciesAreAvailable:
         tree = ast.parse(path.read_text())
         stdlib_prefixes = {
             "__future__",
+            "contextlib",
             "json",
             "logging",
             "os",
@@ -175,17 +170,10 @@ class TestDashboardDependenciesAreAvailable:
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     root = alias.name.split(".")[0]
-                    assert root in stdlib_prefixes, (
-                        f"Top-level import '{alias.name}' in dashboard.py "
-                        f"pulls in a third-party dep — move it inside the "
-                        f"function that needs it."
-                    )
+                    assert root in stdlib_prefixes, f"Top-level import '{alias.name}' in dashboard.py pulls in a third-party dep — move it inside the function that needs it."
             elif isinstance(node, ast.ImportFrom):
                 root = (node.module or "").split(".")[0]
-                assert root in stdlib_prefixes, (
-                    f"Top-level 'from {node.module} import ...' in "
-                    f"dashboard.py pulls in a third-party dep."
-                )
+                assert root in stdlib_prefixes, f"Top-level 'from {node.module} import ...' in dashboard.py pulls in a third-party dep."
 
 
 # --- ghcr.io rate-limit retry -------------------------------------------
@@ -220,9 +208,7 @@ class TestGhcrRetry:
         ok_resp = MagicMock(name="ok")
 
         with (
-            patch(
-                "urllib.request.urlopen", side_effect=[err_429, ok_resp]
-            ) as mock_urlopen,
+            patch("urllib.request.urlopen", side_effect=[err_429, ok_resp]) as mock_urlopen,
             patch("time.sleep") as mock_sleep,
         ):
             result = _ghcr_urlopen_with_retry(MagicMock(), timeout=5)
@@ -253,12 +239,8 @@ class TestGhcrRetry:
 
         err_404 = self._make_http_error(404)
 
-        with (
-            patch("urllib.request.urlopen", side_effect=err_404),
-            patch("time.sleep") as mock_sleep,
-        ):
-            with pytest.raises(urllib.error.HTTPError) as excinfo:
-                _ghcr_urlopen_with_retry(MagicMock(), timeout=5)
+        with patch("urllib.request.urlopen", side_effect=err_404), patch("time.sleep") as mock_sleep, pytest.raises(urllib.error.HTTPError) as excinfo:
+            _ghcr_urlopen_with_retry(MagicMock(), timeout=5)
 
         assert excinfo.value.code == 404
         mock_sleep.assert_not_called()
@@ -276,9 +258,9 @@ class TestGhcrRetry:
                 side_effect=[err_429, err_429, err_429, err_429],
             ) as mock_urlopen,
             patch("time.sleep"),
+            pytest.raises(urllib.error.HTTPError),
         ):
-            with pytest.raises(urllib.error.HTTPError):
-                _ghcr_urlopen_with_retry(MagicMock(), timeout=5, max_attempts=4)
+            _ghcr_urlopen_with_retry(MagicMock(), timeout=5, max_attempts=4)
         assert mock_urlopen.call_count == 4
 
 
@@ -338,12 +320,7 @@ class TestDetectDockerMediaPrefix:
         and use the upload one (libraryId=null)."""
         from immich_accelerator.__main__ import _detect_docker_media_prefix
 
-        body = (
-            b'{"assets":{"items":['
-            b'{"libraryId":"ext","originalPath":"/ext/library/a.jpg"},'
-            b'{"libraryId":null,"originalPath":"/data/upload/abcdefab-1234-5678-9abc-def012345678/2026/b.jpg"}'
-            b"]}}"
-        )
+        body = b'{"assets":{"items":[{"libraryId":"ext","originalPath":"/ext/library/a.jpg"},{"libraryId":null,"originalPath":"/data/upload/abcdefab-1234-5678-9abc-def012345678/2026/b.jpg"}]}}'
         with self._patch_urlopen(body):
             result = _detect_docker_media_prefix("http://nas:2283", "k")
         assert result == "/data"
@@ -523,16 +500,8 @@ class TestRegressionGuards:
             timeout=10,
         )
         if result.returncode != 0:
-            pytest.fail(
-                f"node failed to load shim via NODE_OPTIONS:\n"
-                f"  NODE_OPTIONS={node_options!r}\n"
-                f"  exit={result.returncode}\n"
-                f"  stdout={result.stdout}\n"
-                f"  stderr={result.stderr}"
-            )
-        assert (
-            "SHIM_LOADED" in result.stderr
-        ), f"shim did not run despite exit 0. stderr: {result.stderr}"
+            pytest.fail(f"node failed to load shim via NODE_OPTIONS:\n  NODE_OPTIONS={node_options!r}\n  exit={result.returncode}\n  stdout={result.stdout}\n  stderr={result.stderr}")
+        assert "SHIM_LOADED" in result.stderr, f"shim did not run despite exit 0. stderr: {result.stderr}"
 
     def test_node_options_quoted_form_is_broken(self, tmp_path):
         """Negative counterpart: prove the v1.4.2 single-quoted form
@@ -560,12 +529,8 @@ class TestRegressionGuards:
             text=True,
             timeout=10,
         )
-        assert result.returncode != 0, (
-            "v1.4.2 quoted form should fail but didn't — " "regression guard invalid"
-        )
-        assert (
-            "Cannot find module" in result.stderr or "MODULE_NOT_FOUND" in result.stderr
-        ), f"expected module-not-found error, got: {result.stderr[:300]}"
+        assert result.returncode != 0, "v1.4.2 quoted form should fail but didn't — regression guard invalid"
+        assert "Cannot find module" in result.stderr or "MODULE_NOT_FOUND" in result.stderr, f"expected module-not-found error, got: {result.stderr[:300]}"
 
     def test_cmd_start_node_options_string_is_well_formed(self):
         """Static check that cmd_start wraps the shim path in DOUBLE
@@ -577,21 +542,11 @@ class TestRegressionGuards:
         Verified empirically against Node 25.2."""
         src = (REPO_ROOT / "immich_accelerator" / "__main__.py").read_text()
         # Must wrap the shim path in double quotes.
-        assert "f'--require \"{shim_path}\"'" in src, (
-            "cmd_start must wrap the shim path in double quotes for "
-            "NODE_OPTIONS. See issue #24 and the empirical findings "
-            "in TestRegressionGuards."
-        )
+        assert "f'--require \"{shim_path}\"'" in src, "cmd_start must wrap the shim path in double quotes for NODE_OPTIONS. See issue #24 and the empirical findings in TestRegressionGuards."
         # Must not regress to single-quoting the require arg.
-        assert "f\"--require '{shim_path}'\"" not in src, (
-            "NODE_OPTIONS single-quoted the shim path — Node doesn't "
-            "honor shell quoting (v1.4.2 regression, #24)"
-        )
+        assert "f\"--require '{shim_path}'\"" not in src, "NODE_OPTIONS single-quoted the shim path — Node doesn't honor shell quoting (v1.4.2 regression, #24)"
         # Must not regress to backslash-escaping whitespace.
-        assert 'str(shim_path).replace(" ", r"\\ ")' not in src, (
-            "NODE_OPTIONS backslash-escaped whitespace — Node doesn't "
-            "honor shell escapes in NODE_OPTIONS either"
-        )
+        assert 'str(shim_path).replace(" ", r"\\ ")' not in src, "NODE_OPTIONS backslash-escaped whitespace — Node doesn't honor shell escapes in NODE_OPTIONS either"
 
 
 class TestPgDumpShim:
@@ -603,11 +558,7 @@ class TestPgDumpShim:
     SHIM_PATH = REPO_ROOT / "immich_accelerator" / "hooks" / "pg_dump_shim.js"
 
     def test_shim_file_exists(self):
-        assert self.SHIM_PATH.exists(), (
-            f"hook shim missing: {self.SHIM_PATH}. "
-            "cmd_start sets NODE_OPTIONS to require this file; if "
-            "it's absent the backup job will still fail with ENOENT."
-        )
+        assert self.SHIM_PATH.exists(), f"hook shim missing: {self.SHIM_PATH}. cmd_start sets NODE_OPTIONS to require this file; if it's absent the backup job will still fail with ENOENT."
 
     def test_shim_is_referenced_by_cmd_start(self):
         """cmd_start must pass the shim to the worker via NODE_OPTIONS.
@@ -650,10 +601,7 @@ class TestPgDumpShim:
             text=True,
             timeout=15,
         )
-        assert result.returncode == 0, (
-            f"shim rewrite failed:\nstdout: {result.stdout}\n"
-            f"stderr: {result.stderr}"
-        )
+        assert result.returncode == 0, f"shim rewrite failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
         assert "pg_dump (PostgreSQL)" in result.stdout
         # The shim writes its rewrite notice to stderr.
         assert "postgres client interpose" in result.stderr
@@ -701,19 +649,13 @@ class TestPgDumpShim:
             text=True,
             timeout=15,
         )
-        assert result.returncode == 0, (
-            f"shim gzip rewrite failed:\n"
-            f"stdout: {result.stdout}\nstderr: {result.stderr}"
-        )
+        assert result.returncode == 0, f"shim gzip rewrite failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
         assert "exit=0" in result.stdout
         # Non-zero byte count proves the pipeline actually wrote data,
         # which is the bug-that-was: exit=0 alone can coexist with a
         # zero-byte output file (which is exactly how the silent
         # failure shipped to users).
-        assert "bytes=0" not in result.stdout, (
-            "shim-rewritten gzip produced 0 bytes — this is the "
-            "exact regression that shipped to users in v1.4.2-1.4.5"
-        )
+        assert "bytes=0" not in result.stdout, "shim-rewritten gzip produced 0 bytes — this is the exact regression that shipped to users in v1.4.2-1.4.5"
         assert "gzip interpose" in result.stderr
 
     @pytest.mark.slow
@@ -775,10 +717,7 @@ class TestPgDumpShim:
             with socket.create_connection(("127.0.0.1", 25432), timeout=1):
                 pass
         except OSError:
-            pytest.skip(
-                "isolated e2e stack not running on 127.0.0.1:25432 — "
-                "bring it up with scripts/e2e-stack.sh up"
-            )
+            pytest.skip("isolated e2e stack not running on 127.0.0.1:25432 — bring it up with scripts/e2e-stack.sh up")
 
         out = tmp_path / "backup.sql.gz"
         # Reproduce Immich's exact spawn shape inside node + shim.
@@ -806,22 +745,13 @@ class TestPgDumpShim:
             text=True,
             timeout=60,
         )
-        assert result.returncode == 0, (
-            f"backup pipeline failed:\n"
-            f"stdout: {result.stdout}\nstderr: {result.stderr}"
-        )
+        assert result.returncode == 0, f"backup pipeline failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
         assert out.exists(), "backup file was not created"
-        assert out.stat().st_size > 0, (
-            "backup file is 0 bytes — the exact regression that "
-            "shipped in v1.4.2-1.4.5. Shim routing of `gzip "
-            "--rsyncable` is broken."
-        )
+        assert out.stat().st_size > 0, "backup file is 0 bytes — the exact regression that shipped in v1.4.2-1.4.5. Shim routing of `gzip --rsyncable` is broken."
         # Validate the file is real gzipped SQL.
         with _gzip.open(out, "rt") as fh:
             head = fh.read(4096)
-        assert (
-            "PostgreSQL database dump" in head
-        ), f"backup content doesn't look like a pg_dump:\n{head[:500]}"
+        assert "PostgreSQL database dump" in head, f"backup content doesn't look like a pg_dump:\n{head[:500]}"
 
 
 class TestExternalLibraryValidation:
@@ -895,9 +825,7 @@ class TestExternalLibraryValidation:
             ),
             patch(
                 "immich_accelerator.__main__._fetch_external_libraries",
-                return_value=[
-                    {"name": "Missing", "importPaths": ["/does-not-exist-here"]}
-                ],
+                return_value=[{"name": "Missing", "importPaths": ["/does-not-exist-here"]}],
             ),
             caplog.at_level(logging.DEBUG),
         ):
@@ -923,17 +851,11 @@ class TestBrewInstallDetection:
     def test_cellar_path_is_detected_as_brew_install(self):
         # The detection heuristic is a substring match on the resolved
         # __file__. Simulate a Cellar-style path to verify the check.
-        brew_path = (
-            "/opt/homebrew/Cellar/immich-accelerator/1.4.1/libexec/"
-            "immich_accelerator/__main__.py"
-        )
+        brew_path = "/opt/homebrew/Cellar/immich-accelerator/1.4.1/libexec/immich_accelerator/__main__.py"
         assert "/Cellar/immich-accelerator/" in brew_path
 
     def test_direct_clone_is_not_detected_as_brew(self):
-        direct_path = (
-            "/Users/someone/Repos/immich-apple-silicon/"
-            "immich_accelerator/__main__.py"
-        )
+        direct_path = "/Users/someone/Repos/immich-apple-silicon/immich_accelerator/__main__.py"
         assert "/Cellar/immich-accelerator/" not in direct_path
 
     def test_finalize_config_and_uninstall_branch_on_brew_detection(self):
@@ -943,15 +865,10 @@ class TestBrewInstallDetection:
         guard is dropped or a consumer stops using it."""
         src = (REPO_ROOT / "immich_accelerator" / "__main__.py").read_text()
         # The guard itself lives in the centralized helper:
-        assert '"/Cellar/immich-accelerator/" in str(Path(__file__).resolve())' in src, (
-            "_is_brew_install() must detect Homebrew Cellar installs."
-        )
+        assert '"/Cellar/immich-accelerator/" in str(Path(__file__).resolve())' in src, "_is_brew_install() must detect Homebrew Cellar installs."
         # The def plus both consumers (_offer_launchd_service, cmd_uninstall)
         # reference it — so the call-name appears at least 3 times.
-        assert src.count("_is_brew_install()") >= 3, (
-            "Both _offer_launchd_service and cmd_uninstall must check "
-            "_is_brew_install() before touching Cellar-owned files."
-        )
+        assert src.count("_is_brew_install()") >= 3, "Both _offer_launchd_service and cmd_uninstall must check _is_brew_install() before touching Cellar-owned files."
 
 
 class TestKillStaleProcessesPattern:
@@ -1027,21 +944,14 @@ class TestKillStaleProcessesPattern:
         end = src.index("\ndef ", start + 1)
         body = src[start:end]
         code_only = _re.sub(r'"""[\s\S]*?"""', "", body)
-        code_only = _re.sub(r"^\s*#.*$", "", code_only, flags=_re.M)
-        assert (
-            '"immich|src.main"' not in code_only
-        ), "bare-substring pattern killed the E2E harness; do not revive"
-        assert (
-            '"immich"' not in code_only
-        ), "bare 'immich' substring catches unrelated processes"
+        code_only = _re.sub(r"^\s*#.*$", "", code_only, flags=_re.MULTILINE)
+        assert '"immich|src.main"' not in code_only, "bare-substring pattern killed the E2E harness; do not revive"
+        assert '"immich"' not in code_only, "bare 'immich' substring catches unrelated processes"
 
     # ---- regex-only sanity checks on the compiled patterns ----
 
     def test_stale_worker_regex_matches_canonical_worker(self):
-        cmd = (
-            "/opt/homebrew/opt/node@22/bin/node "
-            "/Users/elp/.immich-accelerator/server/2.7.4/dist/main.js"
-        )
+        cmd = "/opt/homebrew/opt/node@22/bin/node /Users/elp/.immich-accelerator/server/2.7.4/dist/main.js"
         assert _STALE_WORKER_RE.search(cmd)
 
     def test_stale_worker_regex_matches_immich_process_title(self):
@@ -1051,7 +961,7 @@ class TestKillStaleProcessesPattern:
         assert not _STALE_WORKER_RE.search("docker compose ... immich-e2e-stack")
 
     def test_stale_ml_regex_matches_canonical_ml(self):
-        cmd = "/Users/elp/.immich-accelerator/ml/venv/bin/python3.11 " "-m src.main"
+        cmd = "/Users/elp/.immich-accelerator/ml/venv/bin/python3.11 -m src.main"
         assert _STALE_ML_RE.search(cmd)
 
     def test_stale_ml_regex_rejects_prefix_collision(self):
@@ -1066,12 +976,11 @@ class TestKillStaleProcessesPattern:
         rows = [
             (
                 1001,
-                "/opt/homebrew/opt/node@22/bin/node "
-                "/Users/elp/.immich-accelerator/server/2.7.4/dist/main.js",
+                "/opt/homebrew/opt/node@22/bin/node /Users/elp/.immich-accelerator/server/2.7.4/dist/main.js",
             ),
             (
                 1002,
-                "/Users/elp/.immich-accelerator/ml/venv/bin/python3.11 " "-m src.main",
+                "/Users/elp/.immich-accelerator/ml/venv/bin/python3.11 -m src.main",
             ),
         ]
         killed = self._run(rows)
@@ -1089,15 +998,11 @@ class TestKillStaleProcessesPattern:
         rows = [
             (
                 2001,
-                "/opt/homebrew/opt/node@22/bin/node "
-                "/Users/elp/.immich-accelerator/server/2.7.4/dist/main.js",
+                "/opt/homebrew/opt/node@22/bin/node /Users/elp/.immich-accelerator/server/2.7.4/dist/main.js",
             ),
         ]
         killed = self._run(rows, tracked={"worker": 2001})
-        assert killed == [], (
-            "tracked worker PID 2001 was killed — watchdog is supposed "
-            "to leave the live managed process alone"
-        )
+        assert killed == [], "tracked worker PID 2001 was killed — watchdog is supposed to leave the live managed process alone"
 
     def test_does_not_kill_e2e_harness_processes(self):
         """The exact cmdline shapes the old broad pattern was
@@ -1106,19 +1011,16 @@ class TestKillStaleProcessesPattern:
             (3001, "tart run --no-graphics immich-test-run-20260415-011735"),
             (
                 3002,
-                "/Users/elp/.orbstack/bin/docker compose -f "
-                "/Users/elp/Repos/immich-apple-silicon/scripts/e2e-stack.yml up -d",
+                "/Users/elp/.orbstack/bin/docker compose -f /Users/elp/Repos/immich-apple-silicon/scripts/e2e-stack.yml up -d",
             ),
             (
                 3003,
-                "socat TCP-LISTEN:12283,bind=192.168.64.1,fork,reuseaddr "
-                "TCP:127.0.0.1:22283",
+                "socat TCP-LISTEN:12283,bind=192.168.64.1,fork,reuseaddr TCP:127.0.0.1:22283",
             ),
             (3004, "ssh -i /tmp/iac-e2e-key admin@192.168.64.38"),
             (
                 3005,
-                "rsync -az /Users/elp/Repos/immich-apple-silicon/"
-                "immich_accelerator admin@192.168.64.38:/tmp/iac-src/",
+                "rsync -az /Users/elp/Repos/immich-apple-silicon/immich_accelerator admin@192.168.64.38:/tmp/iac-src/",
             ),
             (3006, "/opt/homebrew/bin/python3 /tmp/drift_check.py"),
             (3007, "bash scripts/e2e-run.sh"),
@@ -1135,12 +1037,11 @@ class TestKillStaleProcessesPattern:
             # Real zombies
             (
                 4001,
-                "/opt/homebrew/opt/node@22/bin/node "
-                "/Users/elp/.immich-accelerator/server/2.7.4/dist/main.js",
+                "/opt/homebrew/opt/node@22/bin/node /Users/elp/.immich-accelerator/server/2.7.4/dist/main.js",
             ),
             (
                 4002,
-                "/Users/elp/.immich-accelerator/ml/venv/bin/python3.11 " "-m src.main",
+                "/Users/elp/.immich-accelerator/ml/venv/bin/python3.11 -m src.main",
             ),
             # Harness + noise — all must survive
             (4101, "tart run --no-graphics immich-test-run-20260415-011735"),
@@ -1216,10 +1117,7 @@ class TestNodeVersionPreflight:
         fake.chmod(0o755)
         ok, msg = _check_node_engines_compat(tmp_path, str(fake))
         assert not ok, "node 25 must be rejected"
-        assert "node@22" in msg, (
-            "rejection message must point users at the correct install "
-            "command — the whole point of the error is actionability"
-        )
+        assert "node@22" in msg, "rejection message must point users at the correct install command — the whole point of the error is actionability"
 
     def test_check_engines_compat_missing_package_json_is_ok(self, tmp_path):
         # No package.json (e.g. pre-server-download) — we can't evaluate
@@ -1247,13 +1145,8 @@ class TestNodeVersionPreflight:
         """Static check: the CI-generated Homebrew formula must pin
         node@22. A regression to `depends_on "node"` re-ships the bug.
         """
-        template = (
-            REPO_ROOT / ".github" / "workflows" / "update-homebrew.yml"
-        ).read_text()
-        assert 'depends_on "node@22"' in template, (
-            "Formula template must pin node@22 — "
-            '`depends_on "node"` pulls mainline which breaks sharp.'
-        )
+        template = (REPO_ROOT / ".github" / "workflows" / "update-homebrew.yml").read_text()
+        assert 'depends_on "node@22"' in template, 'Formula template must pin node@22 — `depends_on "node"` pulls mainline which breaks sharp.'
         # And the bare version must be GONE — no lingering duplicate.
         # (Count occurrences to allow the pinned form to exist alongside
         # comments that mention "node" as text.)
@@ -1282,12 +1175,14 @@ class TestNodeVersionPreflight:
         non-interactive environment without hitting real binaries.
         """
         (tmp_path / "package.json").write_text("{}")
-        with patch(
-            "immich_accelerator.__main__.find_npm",
-            return_value="/usr/bin/false",
+        with (
+            patch(
+                "immich_accelerator.__main__.find_npm",
+                return_value="/usr/bin/false",
+            ),
+            pytest.raises(RuntimeError) as exc_info,
         ):
-            with pytest.raises(RuntimeError) as exc_info:
-                _rebuild_sharp(tmp_path)
+            _rebuild_sharp(tmp_path)
         assert "Sharp not found" in str(exc_info.value)
         # Remediation must point at setup, not a dead-end error.
         assert "setup" in str(exc_info.value).lower()
@@ -1302,7 +1197,6 @@ class TestNodeVersionPreflight:
             patch("immich_accelerator.__main__._node_major_version") as mock_ver,
             patch("immich_accelerator.__main__._brew_install") as mock_brew,
         ):
-
             # Only /opt/homebrew/bin/node exists BEFORE brew install,
             # plus the node@22 keg appears AFTER brew install succeeds.
             state = {"after_install": False}
@@ -1376,8 +1270,5 @@ class TestDashboardStartsInFreshVenv:
             timeout=30,
         )
 
-        assert result.returncode == 0, (
-            f"Dashboard create_app failed in fresh venv.\n"
-            f"stdout: {result.stdout}\nstderr: {result.stderr}"
-        )
+        assert result.returncode == 0, f"Dashboard create_app failed in fresh venv.\nstdout: {result.stdout}\nstderr: {result.stderr}"
         assert "ok FastAPI" in result.stdout

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Internal
+- **Static-analysis stack.** Added [ruff](https://docs.astral.sh/ruff/) linting + formatting and [pyright](https://github.com/microsoft/pyright) type-checking for the CLI (`pyproject.toml`), plus gitleaks secret scanning, Dependabot, and pre-commit hooks; all wired into CI. The `ml/` submodule gets the same ruff config and pre-commit/Dependabot setup (its pyright + tests stay local, since they need the native mlx/cv2 venv). No user-facing behavior change.
+
 ## 1.5.3 — 2026-06-03
 
 ### Fixes

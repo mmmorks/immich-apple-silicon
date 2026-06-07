@@ -16,12 +16,38 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Syntax check
-        run: python -m py_compile immich_accelerator/__init__.py
-      - name: Run pytest (fast)
+      - name: Install tooling
+        # ruff/pyright need no project deps; fastapi/uvicorn/numpy/pillow/httpx
+        # are imported by the dashboard + tests so pyright can resolve them.
+        run: pip install ruff==0.15.16 pyright pytest fastapi uvicorn numpy pillow httpx
+      - name: Ruff lint (parent + ml)
+        # The two repos carry separate pyproject.toml configs; ruff picks the
+        # nearest one per file. `.` excludes ml/ (parent config), so lint it
+        # explicitly with its own config.
         run: |
-          pip install pytest
-          pytest -v -m "not slow"
+          ruff check .
+          ruff check ml
+      - name: Ruff format check (parent + ml)
+        run: |
+          ruff format --check .
+          ruff format --check ml
+      - name: Pyright type check (parent)
+        # ml/ is excluded: its type check needs the heavy native venv
+        # (mlx is Apple-Silicon-only) which can't be installed on Linux runners.
+        run: pyright
+      - name: Run pytest (fast)
+        run: pytest -v -m "not slow"
+
+  secrets-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
 
   fresh-install-macos:
     # Runs on a clean macOS Apple Silicon runner — no global pip
@@ -123,7 +149,7 @@ jobs:
 
   auto-tag:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [lint, fresh-install-macos, fresh-install-docker]
+    needs: [lint, secrets-scan, fresh-install-macos, fresh-install-docker]
     runs-on: ubuntu-latest
     permissions:
       contents: write

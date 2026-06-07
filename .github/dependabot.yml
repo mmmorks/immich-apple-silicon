@@ -1,0 +1,10 @@
+version: 2
+updates:
+  # The parent repo's only managed dependency surface is its GitHub Actions.
+  # Python deps live in the ml/ submodule (a separate repo) — its own
+  # .github/dependabot.yml handles pip updates there.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
