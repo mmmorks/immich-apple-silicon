@@ -933,8 +933,11 @@ class TestSetupMlOnly:
                    return_value=Path("/Users/test/ml")), \
              patch("immich_accelerator.__main__._install_powermetrics_sudoers",
                    return_value=True), \
+             patch("immich_accelerator.__main__._offer_launchd_service",
+                   return_value=False) as offer, \
              patch("immich_accelerator.__main__._print_nas_wiring"):
             _setup_ml_only(args)
+        offer.assert_called_once()  # ml-only setup offers launchd auto-start
 
         cfg = load_config()
         assert cfg["mode"] == "ml-only"
@@ -955,6 +958,8 @@ class TestSetupMlOnly:
         with patch("immich_accelerator.__main__._find_ml_dir",
                    return_value=Path("/Users/test/ml")), \
              patch("immich_accelerator.__main__._install_powermetrics_sudoers",
+                   return_value=False), \
+             patch("immich_accelerator.__main__._offer_launchd_service",
                    return_value=False), \
              patch("immich_accelerator.__main__._print_nas_wiring"):
             _setup_ml_only(args)
@@ -979,6 +984,66 @@ class TestSetupMlOnly:
         with patch("immich_accelerator.__main__._find_ml_dir", return_value=None):
             with pytest.raises(RuntimeError):
                 _setup_ml_only(args)
+
+
+class TestLaunchdService:
+    _TEMPLATE = (
+        "<plist><string>/opt/homebrew/bin/python3</string>"
+        "<string>/path/to/immich-apple-silicon</string></plist>\n"
+    )
+
+    def _src(self, tmp_path):
+        src = tmp_path / "tmpl.plist"
+        src.write_text(self._TEMPLATE)
+        return src
+
+    def test_brew_install_defers_to_brew_services(self, tmp_path):
+        from immich_accelerator.__main__ import _offer_launchd_service
+        dst = tmp_path / "out.plist"
+        with patch("immich_accelerator.__main__._is_brew_install", return_value=True), \
+             patch("immich_accelerator.__main__.LAUNCHD_PLIST_SRC", self._src(tmp_path)), \
+             patch("immich_accelerator.__main__.LAUNCHD_PLIST_DST", dst):
+            assert _offer_launchd_service() is False
+        assert not dst.exists()
+
+    def test_installs_and_loads_when_accepted(self, tmp_path):
+        from immich_accelerator.__main__ import _offer_launchd_service
+        import sys as _sys
+        dst = tmp_path / "LaunchAgents" / "out.plist"
+        runs = []
+        with patch("immich_accelerator.__main__._is_brew_install", return_value=False), \
+             patch("immich_accelerator.__main__.LAUNCHD_PLIST_SRC", self._src(tmp_path)), \
+             patch("immich_accelerator.__main__.LAUNCHD_PLIST_DST", dst), \
+             patch("builtins.input", return_value="y"), \
+             patch("immich_accelerator.__main__.subprocess.run",
+                   side_effect=lambda cmd, *a, **k: runs.append(cmd) or MagicMock(returncode=0)):
+            assert _offer_launchd_service() is True
+        content = dst.read_text()
+        assert "/path/to/immich-apple-silicon" not in content  # repo dir substituted
+        assert "/opt/homebrew/bin/python3" not in content      # python path substituted
+        assert _sys.executable in content
+        assert any(c[:2] == ["launchctl", "load"] for c in runs)
+
+    def test_declined_does_not_install(self, tmp_path):
+        from immich_accelerator.__main__ import _offer_launchd_service
+        dst = tmp_path / "out.plist"
+        with patch("immich_accelerator.__main__._is_brew_install", return_value=False), \
+             patch("immich_accelerator.__main__.LAUNCHD_PLIST_SRC", self._src(tmp_path)), \
+             patch("immich_accelerator.__main__.LAUNCHD_PLIST_DST", dst), \
+             patch("builtins.input", return_value="n"):
+            assert _offer_launchd_service() is False
+        assert not dst.exists()
+
+    def test_already_installed_is_noop(self, tmp_path):
+        from immich_accelerator.__main__ import _offer_launchd_service
+        dst = tmp_path / "out.plist"
+        dst.write_text("existing")
+        with patch("immich_accelerator.__main__._is_brew_install", return_value=False), \
+             patch("immich_accelerator.__main__.LAUNCHD_PLIST_SRC", self._src(tmp_path)), \
+             patch("immich_accelerator.__main__.LAUNCHD_PLIST_DST", dst), \
+             patch("builtins.input", side_effect=AssertionError("should not prompt")):
+            assert _offer_launchd_service() is False
+        assert dst.read_text() == "existing"  # untouched
 
 
 class TestStartMlOnly:

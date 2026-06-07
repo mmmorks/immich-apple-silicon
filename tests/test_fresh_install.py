@@ -937,15 +937,20 @@ class TestBrewInstallDetection:
         assert "/Cellar/immich-accelerator/" not in direct_path
 
     def test_finalize_config_and_uninstall_branch_on_brew_detection(self):
-        """Both `_finalize_config` and `cmd_uninstall` must contain the
-        brew-install detection guard. This is a static check — if
-        someone edits either function and drops the guard, this test
-        flags the regression."""
+        """Brew-install detection must guard the Cellar-sensitive operations
+        (launchd plist install + uninstall cleanup). The check is centralized
+        in `_is_brew_install()`; this static check flags a regression if the
+        guard is dropped or a consumer stops using it."""
         src = (REPO_ROOT / "immich_accelerator" / "__main__.py").read_text()
-        # Both functions set the same `is_brew_install` variable:
-        assert src.count('is_brew_install = "/Cellar/immich-accelerator/"') >= 2, (
-            "Both _finalize_config and cmd_uninstall must detect brew "
-            "installs and avoid touching Cellar-owned files."
+        # The guard itself lives in the centralized helper:
+        assert '"/Cellar/immich-accelerator/" in str(Path(__file__).resolve())' in src, (
+            "_is_brew_install() must detect Homebrew Cellar installs."
+        )
+        # The def plus both consumers (_offer_launchd_service, cmd_uninstall)
+        # reference it — so the call-name appears at least 3 times.
+        assert src.count("_is_brew_install()") >= 3, (
+            "Both _offer_launchd_service and cmd_uninstall must check "
+            "_is_brew_install() before touching Cellar-owned files."
         )
 
 

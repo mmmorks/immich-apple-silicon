@@ -43,6 +43,12 @@ DATA_DIR = Path.home() / ".immich-accelerator"
 CONFIG_FILE = DATA_DIR / "config.json"
 PID_DIR = DATA_DIR / "pids"
 LOG_DIR = DATA_DIR / "logs"
+LAUNCHD_PLIST_SRC = (
+    Path(__file__).parent.parent / "launchd" / "com.immich.accelerator.plist"
+)
+LAUNCHD_PLIST_DST = (
+    Path.home() / "Library" / "LaunchAgents" / "com.immich.accelerator.plist"
+)
 
 # Node.js majors Immich 2.7.x + sharp@0.34.5 are known to work with.
 # Immich pins engines.node=24.x; sharp's native addons break with
@@ -1698,43 +1704,9 @@ def _finalize_config(config: dict) -> None:
     if not answer or answer == "y":
         cmd_start(argparse.Namespace(force=True))
 
-    # Offer to install launchd service (watch mode — manages worker, ML, and dashboard).
-    # Brew-installed users must use `brew services start immich-accelerator` instead:
-    # the Homebrew formula defines its own service block, and brew services survives
-    # upgrades correctly. A hand-rolled plist with a Cellar-versioned python path
-    # would go stale the first time `brew upgrade` bumped the cellar.
-    is_brew_install = "/Cellar/immich-accelerator/" in str(Path(__file__).resolve())
-    plist_src = (
-        Path(__file__).parent.parent / "launchd" / "com.immich.accelerator.plist"
-    )
-    plist_dst = (
-        Path.home() / "Library" / "LaunchAgents" / "com.immich.accelerator.plist"
-    )
-
-    if is_brew_install:
-        log.info("")
-        log.info("Installed via Homebrew. To auto-start on login:")
-        log.info("  brew services start immich-accelerator")
-    elif plist_src.exists() and not plist_dst.exists():
-        try:
-            answer = (
-                input("  Install as system service (auto-starts on login)? [Y/n] ")
-                .strip()
-                .lower()
-            )
-        except EOFError:
-            answer = "n"
-        if not answer or answer == "y":
-            content = plist_src.read_text()
-            repo_dir = str(Path(__file__).parent.parent.resolve())
-            content = content.replace("/path/to/immich-apple-silicon", repo_dir)
-            content = content.replace("/opt/homebrew/bin/python3", sys.executable)
-            plist_dst.parent.mkdir(parents=True, exist_ok=True)
-            plist_dst.write_text(content)
-            subprocess.run(
-                ["launchctl", "load", str(plist_dst)], capture_output=True, timeout=10
-            )
-            log.info("  Installed (auto-starts worker, ML, and dashboard on login)")
+    # Offer to install launchd service (watch mode — manages worker, ML, and
+    # dashboard). Brew installs are steered to `brew services` inside the helper.
+    _offer_launchd_service()
 
     log.info("")
     log.info("Immich Accelerator is running.")
@@ -2871,6 +2843,53 @@ def _find_ml_dir() -> Path | None:
     return ml_dir
 
 
+def _is_brew_install() -> bool:
+    """True when running from a Homebrew Cellar install (vs a direct clone)."""
+    return "/Cellar/immich-accelerator/" in str(Path(__file__).resolve())
+
+
+def _offer_launchd_service() -> bool:
+    """Offer to install the launchd auto-start service. Returns True if the
+    service is now installed and loaded.
+
+    The plist runs ``immich-accelerator watch``, which dispatches to the
+    configured mode (full or ml-only) at runtime — so one plist serves both.
+    Homebrew installs are steered to ``brew services`` instead, since the
+    formula owns its own service block and survives upgrades.
+    """
+    if _is_brew_install():
+        log.info("")
+        log.info("Installed via Homebrew. To auto-start on login:")
+        log.info("  brew services start immich-accelerator")
+        return False
+
+    if not LAUNCHD_PLIST_SRC.exists() or LAUNCHD_PLIST_DST.exists():
+        return False
+
+    try:
+        answer = (
+            input("  Install as system service (auto-starts on login)? [Y/n] ")
+            .strip()
+            .lower()
+        )
+    except EOFError:
+        answer = "n"
+    if answer and answer != "y":
+        return False
+
+    content = LAUNCHD_PLIST_SRC.read_text()
+    repo_dir = str(Path(__file__).parent.parent.resolve())
+    content = content.replace("/path/to/immich-apple-silicon", repo_dir)
+    content = content.replace("/opt/homebrew/bin/python3", sys.executable)
+    LAUNCHD_PLIST_DST.parent.mkdir(parents=True, exist_ok=True)
+    LAUNCHD_PLIST_DST.write_text(content)
+    subprocess.run(
+        ["launchctl", "load", str(LAUNCHD_PLIST_DST)], capture_output=True, timeout=10
+    )
+    log.info("  Installed (auto-starts on login via launchctl)")
+    return True
+
+
 def _setup_ml_only(args) -> None:
     """Configure ML appliance mode: native Metal ML service as a remote
     ML endpoint. No Docker / DB / worker / shared filesystem."""
@@ -2900,7 +2919,11 @@ def _setup_ml_only(args) -> None:
         log.warning("Continuing without real GPU/ANE metrics.")
 
     _print_nas_wiring(config["ml_port"])
-    log.info("Setup complete. Start with: immich-accelerator start")
+
+    if _offer_launchd_service():
+        log.info("Setup complete — service installed; it auto-starts on login.")
+    else:
+        log.info("Setup complete. Start with: immich-accelerator start")
 
 
 def _install_powermetrics_sudoers() -> bool:
@@ -3891,8 +3914,8 @@ def cmd_ml_test(_args):
 
 def cmd_uninstall(_args):
     """Remove services, data, and launchd config."""
-    plist = Path.home() / "Library" / "LaunchAgents" / "com.immich.accelerator.plist"
-    is_brew_install = "/Cellar/immich-accelerator/" in str(Path(__file__).resolve())
+    plist = LAUNCHD_PLIST_DST
+    is_brew_install = _is_brew_install()
     ml_venv = Path(__file__).parent.parent / "ml" / "venv"
 
     log.info("")
