@@ -1111,7 +1111,7 @@ class TestUpdateMlOnly:
 
 class TestFindMlDirRequirementsDrift:
     """_find_ml_dir must reinstall an out-of-date venv instead of silently
-    running with stale dependencies (ml-4x8 / ml-e8r)."""
+    running with stale dependencies."""
 
     def _make_ml_dir(self, tmp_path, req_text="mlx==1.0\n", with_venv=True):
         ml = tmp_path / "ml"

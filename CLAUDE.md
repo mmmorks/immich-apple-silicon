@@ -116,6 +116,27 @@ When that holds, follow this flow (otherwise use the normal `main` checkout flow
 - Keep it simple. No abstractions for one-time operations.
 - The ffmpeg wrapper is bash — keep it minimal, no unnecessary forks.
 
+## Keep bead IDs out of code, comments, docs, and commits
+
+Bead/issue IDs (`ml-1s2`, `ml-7j8.14`, `immich-xxx`, etc.) are tracker bookkeeping.
+They mean nothing to someone reading a clone of this repo, so **anything that ships
+in the tree or in git history must be self-contained** — explain the *what* and *why*
+directly, never by pointing at a bead.
+
+- **Code, comments, docstrings, READMEs, and committed docs/plans:** describe the
+  behavior, bug, or rationale in plain words. Don't append `(ml-xxx)` tags and don't
+  use a bead ID as a noun (write "after the open_clip fallback was removed", not
+  "after ml-b82"; "the wrong-weights fix", not "ml-7j8.17").
+- **Commit messages:** write a standalone summary of the change. A trailing
+  `(ml-xxx)` reference is tolerated as metadata, but the message must make full sense
+  with it stripped out — never let the bead ID carry meaning the message omits.
+- **Where bead IDs belong:** the `bd` tracker, `bd` commands, and ephemeral session
+  chatter only — not the source tree.
+- This applies to the `ml` submodule too (it has no `CLAUDE.md` of its own; this rule
+  governs work there). When in doubt, read the line as a stranger would: if dropping
+  the ID loses information, you denormalized too little; if the ID was the only thing
+  there, you forgot to write the actual explanation.
+
 ## Testing
 
 - Deploy to Mac Mini (`ssh macmini`) and verify before claiming anything works.

@@ -2686,7 +2686,7 @@ def _find_ml_dir() -> Path | None:
         return None
 
     # Venv already exists — keep its dependencies in line with requirements.txt.
-    # Returning early as soon as the venv existed is how ml-e8r happened: a new
+    # Returning early as soon as the venv existed is how the stale-venv bug happened: a new
     # pin (mlx-embeddings) was never installed, so SigLIP2 silently fell back to
     # open_clip. Reinstall only when the requirements hash has actually changed,
     # so steady-state startups stay fast.
