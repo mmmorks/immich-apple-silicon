@@ -56,11 +56,11 @@ jobs:
     # it reaches users. The slow marker enables the venv+pip
     # integration test that builds a pristine fastapi+uvicorn env.
     #
-    # EMERGENCY OVERRIDE: if macos-14 runners become flaky and this
+    # EMERGENCY OVERRIDE: if macos-26 runners become flaky and this
     # blocks a release, trigger `update-homebrew.yml` manually via
     # `gh workflow run update-homebrew.yml -f tag=vX.Y.Z` — that
     # workflow bypasses CI entirely.
-    runs-on: macos-14
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v5
         with:
@@ -87,7 +87,7 @@ jobs:
     # pytest run excludes ml/ (norecursedirs in pytest.ini), so without this job
     # a regression in the MLX models or a dependency bump would pass every gate
     # green.
-    runs-on: macos-14
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v5
         with:
