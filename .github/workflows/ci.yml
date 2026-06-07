@@ -132,10 +132,10 @@ jobs:
     # the production path runs for real on a hosted runner — no self-hosted
     # hardware needed.
     #
-    # Heavy (multi-GB weights), so it stays off the per-PR path and runs on
-    # push-to-main — the integration path for this repo, which commits straight
-    # to main. Manual-dispatch + nightly tiering is added separately.
-    if: github.event_name != 'pull_request'
+    # Heavy tier (multi-GB weights): runs on the nightly schedule and manual
+    # dispatch only — not on pull_request or push — so direct commits to main
+    # stay fast, matching fresh-install-macos/docker.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v5
