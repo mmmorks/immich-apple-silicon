@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Features
+- **LAION CLIP ViT-B-32 now served natively.** The native ML service can now serve the `ViT-B-32__laion2b-s34b-b79k` smart-search model on MLX (it previously raised a "no parity-faithful MLX backend" error). The vendored CLIP backend reads its activation from config, so LAION's standard-`gelu` checkpoint runs faithfully. Verified drop-in: image **and** text cosine `1.0000` (12 photos × 12 queries, top-1 retrieval agreement `1.000`) against the open_clip `laion2b_s34b_b79k` reference through Immich's exact transform — so an existing LAION-built smart-search index stays valid (no re-index).
+
 ### Internal
 - **Static-analysis stack.** Added [ruff](https://docs.astral.sh/ruff/) linting + formatting and [pyright](https://github.com/microsoft/pyright) type-checking for the CLI (`pyproject.toml`), plus gitleaks secret scanning, Dependabot, and pre-commit hooks; all wired into CI. The `ml/` submodule gets the same ruff config and pre-commit/Dependabot setup (its pyright + tests stay local, since they need the native mlx/cv2 venv). No user-facing behavior change.
 - **Face-embedding parity verified — no face re-scan on migration.** Added a parity harness (`ml/scripts/face_embedding_parity.py`) that compares the fork's Apple-Vision face landmarks against upstream's SCRFD keypoints through the *identical* ArcFace recognizer + alignment. On an LFW sample the same face's embedding drifts by a median cosine ~0.98 with no top-1 identity-retrieval loss, so a Docker-built face index and its clusters stay compatible — migrating to the native worker does **not** require re-running face recognition. Documented in the README "Known differences" table; no behavior change.
