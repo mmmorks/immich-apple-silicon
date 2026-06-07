@@ -979,3 +979,36 @@ class TestSetupMlOnly:
         with patch("immich_accelerator.__main__._find_ml_dir", return_value=None):
             with pytest.raises(RuntimeError):
                 _setup_ml_only(args)
+
+
+class TestStartMlOnly:
+    def _make_ml_dir(self, tmp_path):
+        ml = tmp_path / "ml"
+        (ml / "venv" / "bin").mkdir(parents=True)
+        (ml / "venv" / "bin" / "python3").write_text("#!/bin/sh\n")
+        return ml
+
+    def test_cmd_start_dispatches_to_ml_only(self, tmp_data_dir, tmp_path):
+        from immich_accelerator.__main__ import cmd_start, save_config
+        save_config({"mode": "ml-only", "ml_dir": str(tmp_path / "ml"),
+                     "ml_host": "0.0.0.0", "ml_port": 3003})
+        with patch("immich_accelerator.__main__._start_ml_only") as m:
+            cmd_start(argparse.Namespace(force=False))
+        assert m.call_count == 1
+
+    def test_start_ml_only_launches_with_ml_env(self, tmp_data_dir, tmp_path):
+        from immich_accelerator.__main__ import _start_ml_only
+        ml = self._make_ml_dir(tmp_path)
+        config = {"mode": "ml-only", "ml_dir": str(ml),
+                  "ml_host": "0.0.0.0", "ml_port": 3055}
+        with patch("immich_accelerator.__main__._kill_stale_processes"), \
+             patch("immich_accelerator.__main__.read_pid", return_value=None), \
+             patch("immich_accelerator.__main__._ensure_dashboard_running"), \
+             patch("immich_accelerator.__main__.start_service", return_value=4242) as ss:
+            _start_ml_only(config, argparse.Namespace(force=False))
+        name, cmd, env, cwd = ss.call_args[0]
+        assert name == "ml"
+        assert cmd == [str(ml / "venv" / "bin" / "python3"), "-m", "src.main"]
+        assert env["ML_HOST"] == "0.0.0.0"
+        assert env["ML_PORT"] == "3055"
+        assert cwd == str(ml)

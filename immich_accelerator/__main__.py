@@ -3073,8 +3073,65 @@ def _kill_stale_processes():
         time.sleep(1)
 
 
+def _ensure_dashboard_running(config: dict) -> None:
+    """Start the dashboard in the background if it isn't already up."""
+    import urllib.request as _urlreq
+    port = int(config.get("dashboard_port", 8420))
+    try:
+        _urlreq.urlopen(f"http://localhost:{port}/", timeout=2)
+        return  # already running
+    except Exception:
+        pass
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    dash_log = open(LOG_DIR / "dashboard.log", "a")
+    proc = subprocess.Popen(
+        [sys.executable, "-m", __package__ or "immich_accelerator",
+         "dashboard", "--port", str(port)],
+        cwd=str(Path(__file__).parent.parent),
+        stdout=dash_log, stderr=subprocess.STDOUT, start_new_session=True,
+    )
+    dash_log.close()
+    write_pid("dashboard", proc.pid)
+    log.info("Dashboard started: http://localhost:%d", port)
+
+
+def _start_ml_only(config: dict, args) -> None:
+    """Start only the native Metal ML service (+ dashboard)."""
+    _kill_stale_processes()
+
+    if read_pid("ml") and not getattr(args, "force", False):
+        log.info("ML service already running")
+    else:
+        if getattr(args, "force", False):
+            kill_pid("ml")
+        ml_dir = Path(config.get("ml_dir", ""))
+        if not (ml_dir / "venv" / "bin" / "python3").exists():
+            resolved = _find_ml_dir()
+            if resolved:
+                ml_dir = resolved
+                config["ml_dir"] = str(resolved)
+                save_config(config)
+        ml_python = ml_dir / "venv" / "bin" / "python3"
+        if not ml_python.exists():
+            raise RuntimeError(
+                "ML venv not found — run: immich-accelerator setup --ml-only"
+            )
+        env = os.environ.copy()
+        env["ML_HOST"] = config.get("ml_host", "0.0.0.0")
+        env["ML_PORT"] = str(config.get("ml_port", 3003))
+        pid = start_service("ml", [str(ml_python), "-m", "src.main"],
+                            env, str(ml_dir))
+        log.info("ML service running (PID %d) on %s:%s",
+                 pid, env["ML_HOST"], env["ML_PORT"])
+
+    _ensure_dashboard_running(config)
+
+
 def cmd_start(args):
     config = load_config()
+
+    if config.get("mode") == "ml-only":
+        return _start_ml_only(config, args)
 
     # Kill any stale processes before starting
     _kill_stale_processes()
