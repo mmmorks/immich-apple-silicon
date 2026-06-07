@@ -304,6 +304,10 @@
           <span>Endpoint: <span class="v" id="ml-endpoint" style="color:var(--text-dim)">—</span></span>
           <span>Throughput: <span class="v" id="ml-throughput" style="color:var(--text-dim)">—</span></span>
           <span>Latency: <span class="v" id="ml-latency" style="color:var(--text-dim)">—</span></span>
+          <span>Model: <span class="v" id="ml-model" style="color:var(--text-dim)">—</span></span>
+          <span>Health: <span class="v" id="ml-health-status" style="color:var(--text-dim)">—</span></span>
+          <span>Errors: <span class="v" id="ml-errors" style="color:var(--text-dim)">—</span></span>
+          <span id="ml-recent" style="color:var(--text-muted); font-size:11px;"></span>
         </div>
       </div>
     </div>
@@ -542,6 +546,39 @@ function setBar(cls, pct) {
   const e = document.querySelector('.bar-fill.' + cls);
   if (e) e.style.width = Math.max(0, Math.min(100, pct)) + '%';
 }
+function fmtAge(s) {
+  if (s == null) return '';
+  if (s < 60) return Math.round(s) + 's';
+  if (s < 3600) return Math.round(s / 60) + 'm';
+  return (s / 3600).toFixed(1) + 'h';
+}
+function truncate(s, nmax) { s = String(s || ''); return s.length > nmax ? s.slice(0, nmax - 1) + '…' : s; }
+function renderSysBar(sys) {
+  const sysEl = document.getElementById('sys');
+  if (!sysEl) return;
+  sysEl.textContent = '';
+  let memStr = (sys.mem_total_gb != null ? sys.mem_total_gb + ' GB' : '—');
+  if (sys.mem_used_pct != null) {
+    memStr = sys.mem_used_pct + '% used'
+      + (sys.mem_available_gb != null ? ' · ' + sys.mem_available_gb + ' GB free' : '')
+      + ' / ' + sys.mem_total_gb + ' GB';
+  }
+  const items = [
+    ['Load', sys.load_1m != null ? sys.load_1m.toFixed(1) : '—'],
+    ['CPUs', sys.cpus != null ? String(sys.cpus) : '—'],
+    ['Memory', memStr],
+    ['Updated', new Date().toLocaleTimeString()],
+  ];
+  for (const [label, val] of items) {
+    const span = document.createElement('span');
+    span.textContent = label + ' ';
+    const v = document.createElement('span');
+    v.className = 'v';
+    v.textContent = val;
+    span.appendChild(v);
+    sysEl.appendChild(span);
+  }
+}
 
 function renderMl(data) {
   // Hide full-mode-only elements (requeue section header, CPU/VTB chip cards)
@@ -555,56 +592,73 @@ function renderMl(data) {
   const ml = data.ml || {};
   const hw = data.hardware || {};
   const lat = ml.latency_ms || {};
+  const lbt = ml.latency_by_task || {};
+  const health = data.health || {};
+  const events = data.events || {};
 
-  // Service health
+  // Status: active / idle / offline (all read as 0 req/s otherwise), coloured.
   const alive = data.services && data.services.ml && data.services.ml.alive;
-  setText('ml-health', alive ? 'online' : 'offline');
-  setText('ml-endpoint', ml.endpoint || '');
-  setText('ml-throughput', (ml.throughput_rps != null ? ml.throughput_rps : 0).toFixed(2) + ' req/s');
-  setText('ml-latency', 'p50 ' + (lat.p50 != null ? lat.p50 : 0) + 'ms · max ' + (lat.max != null ? lat.max : 0) + 'ms');
+  const activity = ml.activity || (alive ? 'idle' : 'offline');
+  const statusEl = document.getElementById('ml-health');
+  setText('ml-health', activity);
+  if (statusEl) statusEl.style.color = activity === 'active' ? 'var(--green)' : (activity === 'offline' ? 'var(--red)' : 'var(--text-dim)');
 
-  // GPU chip card: real residency %
+  setText('ml-endpoint', ml.endpoint || '');
+  setText('ml-throughput', (ml.throughput_rps != null ? ml.throughput_rps : 0).toFixed(2) + ' req/s'
+    + (ml.last_activity_age_s != null ? ' · ' + fmtAge(ml.last_activity_age_s) + ' ago' : ''));
+  setText('ml-latency', 'p50 ' + (lat.p50 != null ? lat.p50 : 0)
+    + ' · p95 ' + (lat.p95 != null ? lat.p95 : 0)
+    + ' · max ' + (lat.max != null ? lat.max : 0) + ' ms');
+
+  // Loaded model(s) — confirms it is serving the right (non-fallback) model.
+  const models = health.models || {};
+  const clipM = (models.clip && models.clip.loaded) ? models.clip.name : null;
+  const faceM = (models.face && models.face.loaded) ? models.face.name : null;
+  setText('ml-model', clipM ? (clipM + (faceM ? ' · ' + faceM : '')) : 'not loaded');
+
+  // Health status (healthy / degraded / offline) + unload strategy.
+  const hs = health.status || (alive ? 'unknown' : 'offline');
+  const hEl = document.getElementById('ml-health-status');
+  setText('ml-health-status', hs + (health.unload_strategy ? ' · unload: ' + health.unload_strategy : ''));
+  if (hEl) hEl.style.color = hs === 'healthy' ? 'var(--green)'
+    : (hs === 'degraded' ? 'var(--amber)'
+    : ((hs === 'offline' || hs === 'unhealthy') ? 'var(--red)' : 'var(--text-dim)'));
+
+  // Error / warning feed.
+  const errs = events.errors || 0, warns = events.warnings || 0;
+  const eEl = document.getElementById('ml-errors');
+  setText('ml-errors', errs + ' errors · ' + warns + ' warnings');
+  if (eEl) eEl.style.color = errs > 0 ? 'var(--red)' : (warns > 0 ? 'var(--amber)' : 'var(--text-dim)');
+  const recent = events.recent || [];
+  const last = recent.length ? recent[recent.length - 1] : null;
+  setText('ml-recent', last ? ('↳ ' + last.level + ': ' + truncate(last.msg, 80)) : '');
+
+  // GPU chip card: residency % + CLIP latency.
   const gpuPct = hw.gpu_residency_pct;
+  const clipLat = lbt.clip || {};
   setBar('gpu', gpuPct == null ? 0 : gpuPct);
   setText('gpu-pct', gpuPct == null ? '—' : gpuPct.toFixed(1) + '%');
-  setText('gpu-stat', gpuPct == null
-    ? 'powermetrics unavailable'
-    : gpuPct.toFixed(1) + '% · CLIP ' + (ml.tasks ? ml.tasks.clip || 0 : 0));
+  setText('gpu-stat', 'CLIP ' + (ml.tasks ? ml.tasks.clip || 0 : 0)
+    + (clipLat.samples ? ' · p50 ' + clipLat.p50 + ' · p95 ' + clipLat.p95 + 'ms' : '')
+    + (gpuPct == null ? ' · powermetrics off' : ''));
 
-  // ANE chip card: power mW (no utilisation %; normalise bar to 8 W max as visual only)
+  // ANE chip card: power mW + faces/ocr latency.
   const aneMw = hw.ane_mw;
+  const faceLat = lbt.faces || {}, ocrLat = lbt.ocr || {};
   setBar('ane', aneMw == null ? 0 : Math.min(100, aneMw / 80));
   setText('ane-pct', aneMw == null ? '—' : aneMw.toFixed(0) + ' mW');
-  setText('ane-stat', aneMw == null
-    ? 'powermetrics unavailable'
-    : aneMw.toFixed(0) + ' mW · faces ' + (ml.tasks ? ml.tasks.faces || 0 : 0) + ' · ocr ' + (ml.tasks ? ml.tasks.ocr || 0 : 0));
+  setText('ane-stat', 'faces ' + (ml.tasks ? ml.tasks.faces || 0 : 0)
+    + (faceLat.samples ? ' (p50 ' + faceLat.p50 + 'ms)' : '')
+    + ' · ocr ' + (ml.tasks ? ml.tasks.ocr || 0 : 0)
+    + (ocrLat.samples ? ' (p50 ' + ocrLat.p50 + 'ms)' : '')
+    + (aneMw == null ? ' · powermetrics off' : ''));
 
-  // Versions + system (shared with full mode)
+  // Versions + system bar (with memory used/available).
   const accVer = 'v' + (data.accelerator_version || '?');
   document.getElementById('acc-ver').textContent = accVer;
   document.getElementById('footer-ver').textContent = accVer;
   setText('ver', data.version || '—');
-
-  const sys = data.system || {};
-  const sysEl = document.getElementById('sys');
-  if (sysEl) {
-    sysEl.textContent = '';
-    const items = [
-      ['Load', sys.load_1m != null ? sys.load_1m.toFixed(1) : '—'],
-      ['CPUs', sys.cpus != null ? String(sys.cpus) : '—'],
-      ['Memory', sys.mem_total_gb != null ? sys.mem_total_gb + ' GB' : '—'],
-      ['Updated', new Date().toLocaleTimeString()],
-    ];
-    for (const [label, val] of items) {
-      const span = document.createElement('span');
-      span.textContent = label + ' ';
-      const v = document.createElement('span');
-      v.className = 'v';
-      v.textContent = val;
-      span.appendChild(v);
-      sysEl.appendChild(span);
-    }
-  }
+  renderSysBar(data.system || {});
 }
 
 async function refresh() {
