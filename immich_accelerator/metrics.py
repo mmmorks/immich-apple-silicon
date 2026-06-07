@@ -10,14 +10,20 @@ arbitrary args.
 is unit-testable. ``sample_powermetrics`` runs the wrapper via ``sudo -n``
 (non-interactive — fails instead of prompting if the rule is absent).
 
-NOTE: verified against real output on Apple Silicon / macOS 26 (Mac17,9).
-GPU active residency % is only emitted by the ``gpu_power`` sampler; ANE
-power (mW) is only emitted by the ``cpu_power`` sampler — so the wrapper
-requests both. ANE exposes power (mW), not a utilization percentage.
+We use ``-f plist`` (machine-readable) rather than scraping the human
+text output — the text labels and sampler layout vary across macOS
+versions, but the plist keys are structured and stable. Verified on
+Apple Silicon / macOS 26 (Mac17,9):
+  - GPU active residency % is derived from ``gpu.idle_ratio`` (only the
+    ``gpu_power`` sampler populates it): ``(1 - idle_ratio) * 100``.
+  - ANE power (mW) is ``processor.ane_power`` (only the ``cpu_power``
+    sampler populates it).
+So the wrapper requests both samplers. ANE exposes power (mW), not a
+utilization percentage.
 """
 from __future__ import annotations
 
-import re
+import plistlib
 import subprocess
 from pathlib import Path
 
@@ -26,24 +32,42 @@ POWERMETRICS_SUDOERS = Path("/etc/sudoers.d/immich-accelerator")
 
 WRAPPER_CONTENT = (
     "#!/bin/sh\n"
-    "exec /usr/bin/powermetrics -n 1 -i 1000 --samplers cpu_power,gpu_power\n"
+    "exec /usr/bin/powermetrics -n 1 -i 1000 "
+    "--samplers cpu_power,gpu_power -f plist\n"
 )
-
-_GPU_RE = re.compile(r"GPU (?:HW )?active residency:\s+([\d.]+)%")
-_ANE_RE = re.compile(r"ANE Power:\s+([\d.]+)\s*mW")
 
 
 def sudoers_content(user: str) -> str:
     return f"{user} ALL=(root) NOPASSWD: {POWERMETRICS_WRAPPER}\n"
 
 
-def parse_powermetrics(text: str) -> dict:
-    gpu = _GPU_RE.search(text)
-    ane = _ANE_RE.search(text)
-    return {
-        "gpu_residency_pct": float(gpu.group(1)) if gpu else None,
-        "ane_mw": float(ane.group(1)) if ane else None,
-    }
+def parse_powermetrics(raw: bytes | str) -> dict:
+    """Parse one powermetrics plist sample into GPU residency % and ANE mW.
+
+    Accepts the raw stdout (bytes preferred; str is encoded). powermetrics
+    separates successive samples with a NUL byte, so we keep only the first.
+    Returns None for any field that's absent or unparseable.
+    """
+    if isinstance(raw, str):
+        raw = raw.encode("utf-8", "replace")
+    raw = raw.split(b"\x00")[0]  # first sample only
+    try:
+        data = plistlib.loads(raw)
+    except Exception:
+        return {"gpu_residency_pct": None, "ane_mw": None}
+
+    gpu = data.get("gpu") or {}
+    proc = data.get("processor") or {}
+
+    idle = gpu.get("idle_ratio")
+    gpu_residency_pct = (
+        round((1.0 - idle) * 100, 2) if isinstance(idle, (int, float)) else None
+    )
+
+    ane = proc.get("ane_power")
+    ane_mw = float(ane) if isinstance(ane, (int, float)) else None
+
+    return {"gpu_residency_pct": gpu_residency_pct, "ane_mw": ane_mw}
 
 
 def sample_powermetrics() -> dict | None:
@@ -51,8 +75,7 @@ def sample_powermetrics() -> dict | None:
     try:
         r = subprocess.run(
             ["sudo", "-n", str(POWERMETRICS_WRAPPER)],
-            capture_output=True,
-            text=True,
+            capture_output=True,  # bytes (no text=True) — plist may be binary
             timeout=8,
         )
     except (subprocess.SubprocessError, OSError):
