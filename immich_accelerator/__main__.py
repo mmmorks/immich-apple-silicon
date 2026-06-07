@@ -1231,20 +1231,33 @@ def load_config() -> dict:
         return json.load(f)
 
 
-def _get_process_start_time(pid: int) -> str | None:
-    """Get process start time via ps. Used to detect PID reuse."""
+def _process_status(pid: int) -> tuple[str | None, str | None]:
+    """Return ``(state, start_time)`` from ``ps``, or ``(None, None)`` if unseen.
+
+    A zombie (dead but unreaped) is still reported by ``ps`` — on macOS with
+    state ``'Z'`` and a valid start time — so the *state* is what distinguishes
+    it from a live process, not whether a start time exists.
+    """
     try:
         result = subprocess.run(
-            ["ps", "-p", str(pid), "-o", "lstart="],
+            ["ps", "-p", str(pid), "-o", "state=,lstart="],
             capture_output=True,
             text=True,
             timeout=5,
         )
         if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
+            parts = result.stdout.strip().split(None, 1)
+            state = parts[0]
+            start = parts[1] if len(parts) > 1 else None
+            return state, start
     except (subprocess.SubprocessError, OSError):
         pass
-    return None
+    return None, None
+
+
+def _get_process_start_time(pid: int) -> str | None:
+    """Get process start time via ps. Used to detect PID reuse."""
+    return _process_status(pid)[1]
 
 
 def write_pid(name: str, pid: int) -> None:
@@ -1313,8 +1326,29 @@ def _adopt_live_worker() -> int | None:
     return pid
 
 
+# Popen handles for services this process started. Keeping them lets the
+# watcher poll() (which reaps) to detect a child's death directly, instead of
+# probing a discarded PID with os.kill(pid, 0) — which keeps reporting a dead
+# but unreaped child (a zombie) as alive.
+_OWNED_PROCS: dict[str, subprocess.Popen] = {}
+
+
+def _reap_if_child(pid: int) -> None:
+    """Reap ``pid`` if it is a zombie child of this process; ignore otherwise."""
+    with contextlib.suppress(OSError):  # ChildProcessError if not our child
+        os.waitpid(pid, os.WNOHANG)
+
+
 def read_pid(name: str) -> int | None:
     pid_file = PID_DIR / f"{name}.pid"
+
+    def _dead() -> int | None:
+        pid_file.unlink(missing_ok=True)
+        _OWNED_PROCS.pop(name, None)
+        if name == "worker":
+            return _adopt_live_worker()
+        return None
+
     if not pid_file.exists():
         if name == "worker":
             return _adopt_live_worker()
@@ -1322,22 +1356,33 @@ def read_pid(name: str) -> int | None:
     try:
         lines = pid_file.read_text().strip().split("\n")
         pid = int(lines[0])
-        os.kill(pid, 0)  # check if process exists
-        # Verify start time matches to detect PID reuse
-        if len(lines) > 1 and lines[1]:
-            current_start = _get_process_start_time(pid)
-            if current_start and current_start != lines[1]:
-                log.debug("PID %d reused (start time mismatch), cleaning up", pid)
-                pid_file.unlink(missing_ok=True)
-                if name == "worker":
-                    return _adopt_live_worker()
-                return None
-        return pid
     except (ValueError, OSError):
-        pid_file.unlink(missing_ok=True)
-        if name == "worker":
-            return _adopt_live_worker()
-        return None
+        return _dead()
+
+    # If we started this service ourselves, poll() the saved handle. poll()
+    # reaps the child and reports its exit directly, so a service we killed
+    # can't linger as a zombie that os.kill(pid, 0) still reports as alive.
+    proc = _OWNED_PROCS.get(name)
+    if proc is not None and proc.pid == pid:
+        return pid if proc.poll() is None else _dead()
+
+    try:
+        os.kill(pid, 0)  # check if process exists
+    except OSError:
+        return _dead()
+
+    # os.kill(pid, 0) also succeeds for a zombie (dead but not yet reaped), so
+    # consult ps: an unseen pid (None) is gone, and state 'Z' is a zombie.
+    # Either way reap it if it's our child and report it dead.
+    state, current_start = _process_status(pid)
+    if state is None or state.startswith("Z"):
+        _reap_if_child(pid)
+        return _dead()
+    # A changed start time means the PID was reused by a different process.
+    if len(lines) > 1 and lines[1] and current_start and current_start != lines[1]:
+        log.debug("PID %d reused (start time mismatch), cleaning up", pid)
+        return _dead()
+    return pid
 
 
 def _kill_all_worker_processes():
@@ -1432,6 +1477,10 @@ def start_service(name: str, cmd: list[str], env: dict, cwd: str) -> int:
             log.error("  %s", line)
         (PID_DIR / f"{name}.pid").unlink(missing_ok=True)
         raise RuntimeError(f"{name} failed to start")
+
+    # Keep the handle so read_pid() can poll()/reap this child and detect its
+    # death directly, rather than misreading an unreaped zombie as alive.
+    _OWNED_PROCS[name] = proc
 
     return proc.pid
 
@@ -2981,12 +3030,18 @@ def _kill_stale_processes():
 
 def _ensure_dashboard_running(config: dict) -> None:
     """Start the dashboard in the background if it isn't already up."""
+    import urllib.error as _urlerr
     import urllib.request as _urlreq
 
     port = int(config.get("dashboard_port", 8420))
     try:
         _urlreq.urlopen(f"http://localhost:{port}/", timeout=2)
         return  # already running
+    except _urlerr.HTTPError:
+        # The server answered with an error status (e.g. 500) — it IS up and
+        # serving, so don't spawn a duplicate. Only a failed connection means
+        # it's actually down.
+        return
     except Exception:
         pass
     LOG_DIR.mkdir(parents=True, exist_ok=True)

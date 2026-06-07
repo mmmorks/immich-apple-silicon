@@ -19,6 +19,7 @@ from immich_accelerator.__main__ import (
     PID_DIR,
     _build_link_ok,
     _ensure_build_link,
+    _ensure_dashboard_running,
     _find_exposed_port,
     _read_version,
     _remove_build_link,
@@ -221,8 +222,8 @@ class TestPidManagement:
         current_pid = os.getpid()
         start_time = "Mon Apr  1 10:00:00 2026"
         with patch(
-            "immich_accelerator.__main__._get_process_start_time",
-            return_value=start_time,
+            "immich_accelerator.__main__._process_status",
+            return_value=("Ss", start_time),
         ):
             write_pid("worker", current_pid)
             pid = read_pid("worker")
@@ -245,8 +246,8 @@ class TestPidManagement:
         pid_file.write_text(f"{current_pid}\nOLD START TIME")
 
         with patch(
-            "immich_accelerator.__main__._get_process_start_time",
-            return_value="DIFFERENT START TIME",
+            "immich_accelerator.__main__._process_status",
+            return_value=("Ss", "DIFFERENT START TIME"),
         ):
             result = read_pid("worker")
             assert result is None
@@ -258,11 +259,78 @@ class TestPidManagement:
         pid_file.write_text(f"{current_pid}\n{start_time}")
 
         with patch(
-            "immich_accelerator.__main__._get_process_start_time",
-            return_value=start_time,
+            "immich_accelerator.__main__._process_status",
+            return_value=("Ss", start_time),
         ):
             result = read_pid("worker")
             assert result == current_pid
+
+    def test_read_pid_treats_zombie_as_dead(self, tmp_data_dir):
+        # A killed-but-unreaped child is a zombie: os.kill(pid, 0) still
+        # succeeds, but `ps` can't see it so _get_process_start_time is None.
+        # read_pid must report it dead, not alive.
+        pid = 424242
+        pid_file = tmp_data_dir["pid_dir"] / "ml.pid"
+        # Start time still matches (a zombie keeps the dead process's lstart),
+        # so only the 'Z' state reveals it's dead.
+        pid_file.write_text(f"{pid}\nOLD START TIME")
+
+        with (
+            patch("os.kill", return_value=None),  # zombie still "exists"
+            patch(
+                "immich_accelerator.__main__._process_status",
+                return_value=("Z", "OLD START TIME"),  # zombie: state Z
+            ),
+            patch("immich_accelerator.__main__._reap_if_child") as mock_reap,
+        ):
+            result = read_pid("ml")
+
+        assert result is None
+        assert not pid_file.exists()
+        mock_reap.assert_called_once_with(pid)
+
+    def test_read_pid_polls_owned_handle_when_dead(self, tmp_data_dir):
+        # When this process owns the service handle, a dead child is detected
+        # via poll() (which reaps it) without ever consulting os.kill/ps.
+        from immich_accelerator import __main__ as m
+
+        pid = 525252
+        pid_file = tmp_data_dir["pid_dir"] / "ml.pid"
+        pid_file.write_text(f"{pid}\nstart")
+
+        fake_proc = MagicMock()
+        fake_proc.pid = pid
+        fake_proc.poll.return_value = -9  # exited (killed by SIGKILL)
+        m._OWNED_PROCS["ml"] = fake_proc
+        try:
+            with patch("os.kill") as mock_kill:
+                result = read_pid("ml")
+            assert result is None
+            assert not pid_file.exists()
+            fake_proc.poll.assert_called_once()
+            mock_kill.assert_not_called()  # owned-handle path skips os.kill
+            assert "ml" not in m._OWNED_PROCS  # handle cleared on death
+        finally:
+            m._OWNED_PROCS.pop("ml", None)
+
+    def test_read_pid_polls_owned_handle_when_alive(self, tmp_data_dir):
+        from immich_accelerator import __main__ as m
+
+        pid = 626262
+        pid_file = tmp_data_dir["pid_dir"] / "ml.pid"
+        pid_file.write_text(f"{pid}\nstart")
+
+        fake_proc = MagicMock()
+        fake_proc.pid = pid
+        fake_proc.poll.return_value = None  # still running
+        m._OWNED_PROCS["ml"] = fake_proc
+        try:
+            with patch("os.kill") as mock_kill:
+                result = read_pid("ml")
+            assert result == pid
+            mock_kill.assert_not_called()
+        finally:
+            m._OWNED_PROCS.pop("ml", None)
 
     def test_kill_pid_returns_false_when_not_running(self, tmp_data_dir):
         assert kill_pid("worker") is False
@@ -277,6 +345,40 @@ class TestPidManagement:
         ):  # process "gone" immediately
             kill_pid("worker")
             mock_killpg.assert_called_with(current_pid, signal.SIGTERM)
+
+
+# ---------------------------------------------------------------------------
+# _ensure_dashboard_running
+# ---------------------------------------------------------------------------
+
+
+class TestEnsureDashboardRunning:
+    def test_http_error_response_means_running(self, tmp_data_dir):
+        # A live dashboard that answers GET / with 500 must NOT be respawned —
+        # an error status still proves the server is up and serving.
+        import email.message
+        import urllib.error
+
+        err = urllib.error.HTTPError("http://localhost:8420/", 500, "err", email.message.Message(), None)
+        with (
+            patch("urllib.request.urlopen", side_effect=err),
+            patch("immich_accelerator.__main__.subprocess.Popen") as mock_popen,
+        ):
+            _ensure_dashboard_running({})
+        mock_popen.assert_not_called()
+
+    def test_connection_failure_spawns_dashboard(self, tmp_data_dir):
+        import urllib.error
+
+        fake_proc = MagicMock()
+        fake_proc.pid = 12345
+        with (
+            patch("urllib.request.urlopen", side_effect=urllib.error.URLError("refused")),
+            patch("immich_accelerator.__main__.subprocess.Popen", return_value=fake_proc) as mock_popen,
+            patch("immich_accelerator.__main__._get_process_start_time", return_value="t"),
+        ):
+            _ensure_dashboard_running({})
+        mock_popen.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
