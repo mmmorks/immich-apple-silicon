@@ -9,6 +9,22 @@
 - After committing changes inside the `ml` submodule, bump the submodule pointer in
   this parent repo (`git add ml && git commit`) so the parent records the new `ml` SHA.
   A submodule commit alone leaves the parent pointing at the old revision.
+- **Keep `ml` in line with its own `origin/main` — don't trust the recorded pointer.**
+  The parent's recorded `ml` gitlink can *lag* `ml`'s `origin/main` (a bump may never have
+  been committed/pushed), so a plain `git submodule update` leaves you building/testing
+  stale `ml` code. Before starting work **and** before any commit/push, sync the submodule
+  to its origin and re-bump the pointer if it moved:
+
+  ```bash
+  git -C ml fetch origin main
+  git -C ml checkout -B main origin/main            # ml working tree == ml's origin/main tip
+  git add ml                                        # stage the pointer bump (commit per the active profile)
+  # verify they match — this should print nothing:
+  test "$(git -C ml rev-parse HEAD)" = "$(git -C ml rev-parse origin/main)" || echo "ml STILL not at origin/main"
+  ```
+
+  Only `checkout -B main origin/main` *after* any local `ml` commits are pushed (step 3),
+  or you'll move the branch off unpushed work.
 - Version bump + CHANGELOG entry required for every release to main.
 - Tag releases as `vX.Y.Z` matching the VERSION file.
 - Each fork has an `upstream` remote pointing at the original `epheterson/*` repo. To contribute
@@ -36,11 +52,19 @@ When that holds, follow this flow (otherwise use the normal `main` checkout flow
    confusingly. Run once at session start:
 
    ```bash
-   git submodule update --init --recursive   # populates ml/ in this worktree
-   git fetch origin main && git rebase origin/main   # start from the current tip of main
+   git submodule update --init --recursive            # populate ml/ at the parent's recorded SHA
+   git fetch origin main && git rebase origin/main     # parent: start from the current tip of main
+
+   # The recorded ml pointer can lag ml's own origin/main — bring the submodule
+   # in line with ITS origin too, or you build/test stale ml code (see Git workflow above):
+   git -C ml fetch origin main
+   git -C ml checkout -B main origin/main              # ml now at its own origin/main tip
+   git add ml                                          # stage the pointer bump if it moved (commit per profile)
    ```
 
    The `ml` submodule shares its object store with the primary checkout, so this is cheap.
+   Sanity-check before doing any work: `git -C ml log --oneline -1` should show `ml`'s
+   `origin/main` tip, not an older SHA.
 
 2. **Mid-session: commit locally, do not push.** The branch has no upstream and we don't
    want one. The `ml`-pointer-bump rule from the Git workflow above still applies: commit
@@ -58,10 +82,13 @@ When that holds, follow this flow (otherwise use the normal `main` checkout flow
    git fetch origin main && git rebase origin/main
    git push origin HEAD:main
    git fetch origin main && git rebase origin/main   # worktree HEAD now == origin/main
+
+   # re-sync ml to its origin too, so the worktree's ml isn't left behind:
+   git -C ml fetch origin main && git -C ml checkout -B main origin/main
    ```
 
-   Resolve any conflicts in the rebase; **never force-push to `main`**. After this the
-   worktree branch and `origin/main` match — the worktree is back in sync.
+   Resolve any conflicts in the rebase; **never force-push to `main`**. After this both the
+   worktree branch and its `ml` submodule match `origin/main` — the worktree is back in sync.
 
 ## Code style
 
