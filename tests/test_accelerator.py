@@ -1037,6 +1037,19 @@ class TestStartMlOnly:
                 _start_ml_only(config, argparse.Namespace(force=False))
 
 
+class TestUninstallPowermetrics:
+    def test_uninstall_removes_powermetrics(self, tmp_data_dir, monkeypatch):
+        from immich_accelerator.__main__ import cmd_uninstall
+        monkeypatch.setattr("builtins.input", lambda *_: "y")
+        with patch("immich_accelerator.__main__.cmd_stop"), \
+             patch("immich_accelerator.__main__._remove_build_link"), \
+             patch("immich_accelerator.__main__._rmtree_or_explain", return_value=True), \
+             patch("immich_accelerator.__main__.subprocess.run", return_value=MagicMock(returncode=0, stdout="")), \
+             patch("immich_accelerator.__main__._remove_powermetrics_sudoers") as rm:
+            cmd_uninstall(None)
+        rm.assert_called_once()
+
+
 class TestMlOnlyCommands:
     def test_watch_dispatches_to_ml_only(self, tmp_data_dir):
         from immich_accelerator.__main__ import cmd_watch, save_config

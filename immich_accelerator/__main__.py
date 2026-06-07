@@ -3945,6 +3945,9 @@ def cmd_uninstall(_args):
         plist.unlink()
         log.info("Launchd service removed")
 
+    # Remove powermetrics wrapper + sudoers rule (ml-only mode)
+    _remove_powermetrics_sudoers()
+
     # Remove /build firmlink from synthetic.conf
     _remove_build_link()
 
