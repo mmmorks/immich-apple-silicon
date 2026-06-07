@@ -32,6 +32,12 @@ _CACHE_TTL = 3  # seconds
 
 _static_hw: dict | None = None
 
+# ML appliance mode cache
+_ml_cache = None
+_ml_cache_ts = 0.0
+_ml_last_total = 0
+_ml_last_ts = 0.0
+
 
 def _get_accelerator_version() -> str:
     """Get accelerator version from the VERSION file or fall back."""
@@ -139,6 +145,9 @@ def _query_db(sql: str, config: dict) -> str:
 
 def get_status(config: dict) -> dict:
     """Get full accelerator status. Cached for _CACHE_TTL seconds."""
+    if config.get("mode") == "ml-only":
+        return get_status_ml(config)
+
     global _cache, _cache_ts
 
     now = time.monotonic()
@@ -303,6 +312,7 @@ def get_status(config: dict) -> dict:
         vid_pct = 0
 
     status = {
+        "mode": "full",
         "services": {
             "worker": {
                 "alive": worker_alive,
@@ -341,6 +351,90 @@ def get_status(config: dict) -> dict:
     return status
 
 
+def _ping_ml(config: dict) -> bool:
+    import urllib.request as _urlreq
+    port = int(config.get("ml_port", 3003))
+    try:
+        with _urlreq.urlopen(f"http://localhost:{port}/ping", timeout=2) as r:
+            return r.read().decode().strip() == "pong"
+    except Exception:
+        return False
+
+
+def _tail_text(path: Path, max_bytes: int = 65536) -> str:
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - max_bytes))
+            return f.read().decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+
+def _system_metrics() -> dict:
+    load_raw = _run(["sysctl", "-n", "vm.loadavg"])
+    load_1m = 0.0
+    if load_raw:
+        try:
+            load_1m = float(load_raw.strip("{ }").split()[0])
+        except (ValueError, IndexError):
+            pass
+    mem_raw = _run(["sysctl", "-n", "hw.memsize"])
+    cpu_raw = _run(["sysctl", "-n", "hw.ncpu"])
+    return {
+        "load_1m": load_1m,
+        "mem_total_gb": round(int(mem_raw) / (1024**3), 1) if mem_raw else 0,
+        "cpus": int(cpu_raw) if cpu_raw else 0,
+    }
+
+
+def get_status_ml(config: dict) -> dict:
+    """ML appliance status: health, throughput, latency, real GPU/ANE."""
+    global _ml_cache, _ml_cache_ts, _ml_last_total, _ml_last_ts
+    from . import metrics
+    from .ml_stats import parse_ml_log
+
+    now = time.monotonic()
+    if _ml_cache and now - _ml_cache_ts < _CACHE_TTL:
+        return _ml_cache
+
+    ml_alive = _ping_ml(config)
+    log_path = Path.home() / ".immich-accelerator" / "logs" / "ml.log"
+    stats = parse_ml_log(_tail_text(log_path))
+
+    rate = 0.0
+    if _ml_last_ts and now > _ml_last_ts:
+        rate = max(0.0, (stats["total"] - _ml_last_total) / (now - _ml_last_ts))
+    _ml_last_total = stats["total"]
+    _ml_last_ts = now
+
+    pm = metrics.sample_powermetrics() if config.get("metrics_powermetrics") else None
+
+    status = {
+        "mode": "ml-only",
+        "services": {"ml": {"alive": ml_alive, "name": "ML Service"}},
+        "ml": {
+            "throughput_rps": round(rate, 2),
+            "tasks": stats["tasks"],
+            "latency_ms": stats["latency_ms"],
+            "total_predicts": stats["total"],
+            "endpoint": f"http://{config.get('ml_host', '0.0.0.0')}:{config.get('ml_port', 3003)}",
+        },
+        "hardware": {
+            "gpu_residency_pct": pm.get("gpu_residency_pct") if pm else None,
+            "ane_mw": pm.get("ane_mw") if pm else None,
+            "powermetrics": bool(pm),
+        },
+        "system": _system_metrics(),
+        "version": "—",
+        "accelerator_version": _get_accelerator_version(),
+    }
+    _ml_cache = status
+    _ml_cache_ts = now
+    return status
+
+
 def _load_html() -> str:
     """Load the dashboard HTML from the static file."""
     html_path = Path(__file__).parent / "dashboard.html"
@@ -366,6 +460,11 @@ def create_app(config: dict):
     async def api_requeue():
         """Trigger 'Run All Missing' for thumbnail, CLIP, faces, and OCR queues."""
         import urllib.request, urllib.error
+
+        if config.get("mode") == "ml-only":
+            return JSONResponse(
+                {"error": "requeue disabled in ml-only mode"}, status_code=400
+            )
 
         api_key = config.get("api_key", "")
         immich_url = config.get("immich_url", "http://localhost:2283")

@@ -414,3 +414,50 @@ class TestFastAPIApp:
             data = resp.json()
             for v in data.values():
                 assert v == "ok"
+
+
+# ---------------------------------------------------------------------------
+# TestGetStatusMl
+# ---------------------------------------------------------------------------
+
+class TestGetStatusMl:
+    def _cfg(self):
+        return {"mode": "ml-only", "ml_host": "0.0.0.0", "ml_port": 3003,
+                "metrics_powermetrics": True}
+
+    def test_routes_to_ml_status(self):
+        import immich_accelerator.dashboard as dash
+        with patch.object(dash, "get_status_ml", return_value={"mode": "ml-only"}) as m:
+            out = dash.get_status(self._cfg())
+        assert out == {"mode": "ml-only"}
+        m.assert_called_once()
+
+    def test_ml_status_shape(self):
+        import immich_accelerator.dashboard as dash
+        sample_log = "predict: 1 task(s) [clip] completed in 40ms\n"
+        with patch.object(dash, "_tail_text", return_value=sample_log), \
+             patch.object(dash, "_ping_ml", return_value=True), \
+             patch("immich_accelerator.metrics.sample_powermetrics",
+                   return_value={"gpu_residency_pct": 30.0, "ane_mw": 500.0}), \
+             patch.object(dash, "_system_metrics",
+                          return_value={"load_1m": 1.0, "mem_total_gb": 24.0, "cpus": 10}):
+            # bypass the ml-cache so the body runs
+            dash._ml_cache = None
+            dash._ml_cache_ts = 0
+            out = dash.get_status_ml(self._cfg())
+        assert out["mode"] == "ml-only"
+        assert out["services"]["ml"]["alive"] is True
+        assert out["ml"]["tasks"] == {"clip": 1, "faces": 0, "ocr": 0}
+        assert out["hardware"]["gpu_residency_pct"] == 30.0
+        assert out["hardware"]["ane_mw"] == 500.0
+        assert out["hardware"]["powermetrics"] is True
+
+    def test_full_status_carries_mode_field(self, ):
+        import immich_accelerator.dashboard as dash
+        dash._cache = None
+        dash._cache_ts = 0
+        with patch.object(dash, "_query_db", return_value="0|0|0|0|0|0|0"), \
+             patch.object(dash, "_run", return_value=""), \
+             patch("urllib.request.urlopen", side_effect=Exception):
+            out = dash.get_status({"mode": "full"})
+        assert out["mode"] == "full"
