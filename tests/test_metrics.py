@@ -32,6 +32,26 @@ class TestParsePowermetrics:
         result = metrics.parse_powermetrics("nothing useful here")
         assert result == {"gpu_residency_pct": None, "ane_mw": None}
 
+    def test_parses_real_macos26_output(self):
+        # Captured verbatim from `powermetrics --samplers cpu_power,gpu_power`
+        # on Apple Silicon / macOS 26 (Mac17,9) during Task 13 verification.
+        # GPU residency comes from the gpu_power block, ANE power from cpu_power.
+        real = (
+            "*** Sampled system activity (1006.08ms elapsed) ***\n"
+            "\n**** GPU usage ****\n\n"
+            "GPU HW active frequency: 338 MHz\n"
+            "GPU HW active residency:  10.65% (338 MHz:  11% 486 MHz:   0%)\n"
+            "GPU idle residency:  89.35%\n"
+            "GPU Power: 119 mW\n\n"
+            "CPU Power: 602 mW\n"
+            "GPU Power: 103 mW\n"
+            "ANE Power: 0 mW\n"
+            "Combined Power (CPU + GPU + ANE): 705 mW\n"
+        )
+        result = metrics.parse_powermetrics(real)
+        assert result["gpu_residency_pct"] == 10.65  # not idle/frequency lines
+        assert result["ane_mw"] == 0.0
+
 
 class TestSudoersContent:
     def test_sudoers_line_targets_wrapper(self):
@@ -45,6 +65,12 @@ class TestSudoersContent:
         # sudoers grant cannot be abused with arbitrary args.
         assert "powermetrics" in metrics.WRAPPER_CONTENT
         assert metrics.WRAPPER_CONTENT.startswith("#!/bin/sh")
+
+    def test_wrapper_requests_both_samplers(self):
+        # GPU residency % is only in gpu_power; ANE power only in cpu_power.
+        # Both are required (verified on macOS 26 / Mac17,9, Task 13).
+        assert "cpu_power" in metrics.WRAPPER_CONTENT
+        assert "gpu_power" in metrics.WRAPPER_CONTENT
         assert "$@" not in metrics.WRAPPER_CONTENT
         assert "$*" not in metrics.WRAPPER_CONTENT
         assert "$1" not in metrics.WRAPPER_CONTENT

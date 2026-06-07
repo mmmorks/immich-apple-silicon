@@ -10,9 +10,10 @@ arbitrary args.
 is unit-testable. ``sample_powermetrics`` runs the wrapper via ``sudo -n``
 (non-interactive — fails instead of prompting if the rule is absent).
 
-NOTE: the field labels below are from documented powermetrics output;
-re-verify against the Mac Mini (Task 13). ANE exposes power (mW), not a
-utilization percentage.
+NOTE: verified against real output on Apple Silicon / macOS 26 (Mac17,9).
+GPU active residency % is only emitted by the ``gpu_power`` sampler; ANE
+power (mW) is only emitted by the ``cpu_power`` sampler — so the wrapper
+requests both. ANE exposes power (mW), not a utilization percentage.
 """
 from __future__ import annotations
 
@@ -25,7 +26,7 @@ POWERMETRICS_SUDOERS = Path("/etc/sudoers.d/immich-accelerator")
 
 WRAPPER_CONTENT = (
     "#!/bin/sh\n"
-    "exec /usr/bin/powermetrics -n 1 -i 1000 --samplers gpu_power\n"
+    "exec /usr/bin/powermetrics -n 1 -i 1000 --samplers cpu_power,gpu_power\n"
 )
 
 _GPU_RE = re.compile(r"GPU (?:HW )?active residency:\s+([\d.]+)%")
