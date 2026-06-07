@@ -4,7 +4,8 @@
 
 - This repo (`mmmorks/immich-apple-silicon`) and its `ml` submodule (`mmmorks/immich-ml-metal`)
   are our forks — we own `main` in both. No external approval is needed to merge or push;
-  follow the active profile below for *when* to commit/push (default: when asked).
+  this repo's active agent profile is `team-maintainer` — see "Active agent profile" below
+  for *when* to commit/push.
 - Commit directly to `main` — do not create feature branches.
 - After committing changes inside the `ml` submodule, bump the submodule pointer in
   this parent repo (`git add ml && git commit`) so the parent records the new `ml` SHA.
@@ -30,6 +31,25 @@
 - Each fork has an `upstream` remote pointing at the original `epheterson/*` repo. To contribute
   a change back, open a PR against upstream (`gh pr create --repo epheterson/<repo>`); never push
   to `upstream` directly.
+
+## Active agent profile
+
+This repository **explicitly opts into the `team-maintainer` profile** (defined under
+*Agent Context Profiles* in the Beads block below). That block's `Conservative (default)`
+wording is the fallback for repos that have *not* chosen a profile — it does **not** govern
+this repo. Treat `team-maintainer` as the active policy: agents may run quality gates,
+commit, push, and `bd close` as part of finishing work without asking first. A live
+"do not commit" / "do not push" instruction from the user always wins.
+
+## Closing out bead work
+
+Under the team-maintainer profile, when working a bead, **drive it to completion**: run the
+full commit/push workflow (per "Git workflow" / "Working in a git worktree" above) and
+`bd close` it once the acceptance gates pass — don't stop to ask "should I commit this?".
+If the *only* open question is whether to commit/push and all acceptance criteria + quality
+gates (tests, lint, build) are green, proceed without asking. Pause for human input only on
+genuine obstacles: failing or ambiguous gates, design decisions, destructive/irreversible
+actions, or anything the bead's acceptance criteria don't cover.
 
 ## Working in a git worktree
 
