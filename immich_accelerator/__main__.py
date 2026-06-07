@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import hashlib
 import json
 import logging
 import os
@@ -2764,10 +2765,9 @@ def _find_python() -> str | None:
     return None
 
 
-def _find_ml_dir() -> Path | None:
-    """Find the immich-ml-metal service directory. Sets up venv if needed.
+def _ml_dir_candidates() -> list[Path]:
+    """Ordered locations to probe for the immich-ml-metal service directory.
 
-    Candidate priority:
     1. Homebrew's stable opt symlink — survives ``brew upgrade`` because
        Homebrew maintains ``/opt/homebrew/opt/immich-accelerator`` as a
        symlink to the current Cellar version. The versioned Cellar path
@@ -2779,24 +2779,82 @@ def _find_ml_dir() -> Path | None:
        ``ml/`` is a sibling at ``repo/ml/``.
     3. Home-directory fallback for legacy standalone ml clones.
     """
-    candidates = [
+    return [
         Path("/opt/homebrew/opt/immich-accelerator/libexec/ml"),
         Path(__file__).parent.parent / "ml",
         Path.home() / "immich-ml-metal",
     ]
 
+
+def _hash_file(path: Path) -> str:
+    """SHA-256 hex digest of a file's bytes."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _requirements_marker(ml_dir: Path) -> Path:
+    """Marker file recording the requirements.txt hash the venv was built from.
+
+    Lives inside ``venv/`` so recreating the venv discards it automatically.
+    """
+    return ml_dir / "venv" / ".immich-requirements-hash"
+
+
+def _install_ml_requirements(ml_dir: Path) -> bool:
+    """``pip install -r requirements.txt`` into the venv. On success, record the
+    requirements hash in the marker so unchanged requirements skip reinstalling.
+    """
+    req = ml_dir / "requirements.txt"
+    if not req.exists():
+        log.error("  requirements.txt not found in %s", ml_dir)
+        return False
+
+    log.info("  Installing ML dependencies (this may take a few minutes)...")
+    pip = str(ml_dir / "venv" / "bin" / "pip")
+    result = subprocess.run(
+        [pip, "install", "-r", str(req)], capture_output=False, timeout=600
+    )
+    if result.returncode != 0:
+        log.error("  pip install failed")
+        return False
+
+    _requirements_marker(ml_dir).write_text(_hash_file(req))
+    return True
+
+
+def _find_ml_dir() -> Path | None:
+    """Find the immich-ml-metal service directory. Sets up the venv if missing
+    and reinstalls it when requirements.txt has drifted from the venv."""
     # Find a directory with ML source code
     ml_dir = None
-    for d in candidates:
+    for d in _ml_dir_candidates():
         if (d / "src" / "main.py").exists():
             ml_dir = d
             break
     if not ml_dir:
         return None
 
-    # Check if venv already exists and works
+    # Venv already exists — keep its dependencies in line with requirements.txt.
+    # Returning early as soon as the venv existed is how ml-e8r happened: a new
+    # pin (mlx-embeddings) was never installed, so SigLIP2 silently fell back to
+    # open_clip. Reinstall only when the requirements hash has actually changed,
+    # so steady-state startups stay fast.
     venv_python = ml_dir / "venv" / "bin" / "python3"
     if venv_python.exists():
+        req = ml_dir / "requirements.txt"
+        if not req.exists():
+            return ml_dir  # nothing to verify the venv against
+        marker = _requirements_marker(ml_dir)
+        recorded = marker.read_text().strip() if marker.exists() else None
+        if recorded == _hash_file(req):
+            return ml_dir  # venv matches requirements — fast path, no pip
+        log.info("ML venv at %s is out of date with requirements.txt; "
+                 "reinstalling dependencies...", ml_dir)
+        if not _install_ml_requirements(ml_dir):
+            # Don't take ML offline over a pip hiccup: keep running on the old
+            # deps. The marker is left untouched, so we retry on next startup.
+            log.warning("  Reinstall failed; ML running with stale dependencies.")
+            log.warning("  Fix manually: %s install -r %s",
+                        ml_dir / "venv" / "bin" / "pip", req)
         return ml_dir
 
     # Venv missing — offer to set it up
@@ -2825,18 +2883,7 @@ def _find_ml_dir() -> Path | None:
         log.error("  Venv creation failed: %s", result.stderr[-300:])
         return None
 
-    log.info("  Installing ML dependencies (this may take a few minutes)...")
-    pip = str(ml_dir / "venv" / "bin" / "pip")
-    req = ml_dir / "requirements.txt"
-    if not req.exists():
-        log.error("  requirements.txt not found in %s", ml_dir)
-        return None
-
-    result = subprocess.run(
-        [pip, "install", "-r", str(req)], capture_output=False, timeout=600
-    )
-    if result.returncode != 0:
-        log.error("  pip install failed")
+    if not _install_ml_requirements(ml_dir):
         return None
 
     log.info("  ML service ready")

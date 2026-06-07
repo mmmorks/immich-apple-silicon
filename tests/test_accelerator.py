@@ -1150,3 +1150,86 @@ class TestUpdateMlOnly:
         with patch("immich_accelerator.__main__.find_docker") as fd:
             cmd_update(None)
         fd.assert_not_called()
+
+
+class TestFindMlDirRequirementsDrift:
+    """_find_ml_dir must reinstall an out-of-date venv instead of silently
+    running with stale dependencies (ml-4x8 / ml-e8r)."""
+
+    def _make_ml_dir(self, tmp_path, req_text="mlx==1.0\n", with_venv=True):
+        ml = tmp_path / "ml"
+        (ml / "src").mkdir(parents=True)
+        (ml / "src" / "main.py").write_text("# ml entrypoint")
+        (ml / "requirements.txt").write_text(req_text)
+        if with_venv:
+            (ml / "venv" / "bin").mkdir(parents=True)
+            (ml / "venv" / "bin" / "python3").write_text("#!/bin/sh")
+            (ml / "venv" / "bin" / "pip").write_text("#!/bin/sh")
+        return ml
+
+    def test_returns_ml_dir_without_pip_when_marker_matches(self, tmp_path):
+        from immich_accelerator.__main__ import (
+            _find_ml_dir, _requirements_marker, _hash_file)
+        ml = self._make_ml_dir(tmp_path)
+        _requirements_marker(ml).write_text(_hash_file(ml / "requirements.txt"))
+        with patch("immich_accelerator.__main__._ml_dir_candidates", return_value=[ml]), \
+             patch("immich_accelerator.__main__.subprocess.run") as run:
+            assert _find_ml_dir() == ml
+        run.assert_not_called()  # fast path: no reinstall when hash is current
+
+    def test_reinstalls_when_marker_missing(self, tmp_path):
+        from immich_accelerator.__main__ import (
+            _find_ml_dir, _requirements_marker, _hash_file)
+        ml = self._make_ml_dir(tmp_path)  # no marker written
+        with patch("immich_accelerator.__main__._ml_dir_candidates", return_value=[ml]), \
+             patch("immich_accelerator.__main__.subprocess.run",
+                   return_value=MagicMock(returncode=0)) as run:
+            assert _find_ml_dir() == ml
+        run.assert_called_once()
+        assert _requirements_marker(ml).read_text().strip() == \
+            _hash_file(ml / "requirements.txt")
+
+    def test_reinstalls_when_marker_stale(self, tmp_path):
+        from immich_accelerator.__main__ import (
+            _find_ml_dir, _requirements_marker, _hash_file)
+        ml = self._make_ml_dir(tmp_path)
+        _requirements_marker(ml).write_text("deadbeef")
+        with patch("immich_accelerator.__main__._ml_dir_candidates", return_value=[ml]), \
+             patch("immich_accelerator.__main__.subprocess.run",
+                   return_value=MagicMock(returncode=0)) as run:
+            assert _find_ml_dir() == ml
+        run.assert_called_once()
+        assert _requirements_marker(ml).read_text().strip() == \
+            _hash_file(ml / "requirements.txt")
+
+    def test_returns_ml_dir_but_keeps_stale_marker_when_reinstall_fails(self, tmp_path):
+        from immich_accelerator.__main__ import _find_ml_dir, _requirements_marker
+        ml = self._make_ml_dir(tmp_path)
+        _requirements_marker(ml).write_text("deadbeef")
+        with patch("immich_accelerator.__main__._ml_dir_candidates", return_value=[ml]), \
+             patch("immich_accelerator.__main__.subprocess.run",
+                   return_value=MagicMock(returncode=1)) as run:
+            # ML stays available on the old deps rather than going dark
+            assert _find_ml_dir() == ml
+        run.assert_called_once()
+        # marker NOT advanced -> reinstall is retried on the next startup
+        assert _requirements_marker(ml).read_text().strip() == "deadbeef"
+
+    def test_fresh_venv_creation_writes_marker(self, tmp_path):
+        from immich_accelerator.__main__ import (
+            _find_ml_dir, _requirements_marker, _hash_file)
+        ml = self._make_ml_dir(tmp_path, with_venv=False)
+
+        def fake_run(cmd, *a, **k):
+            # simulate `python -m venv` materialising the venv bin/ + pip
+            (ml / "venv" / "bin").mkdir(parents=True, exist_ok=True)
+            (ml / "venv" / "bin" / "pip").write_text("#!/bin/sh")
+            return MagicMock(returncode=0, stderr="")
+
+        with patch("immich_accelerator.__main__._ml_dir_candidates", return_value=[ml]), \
+             patch("immich_accelerator.__main__._find_python", return_value="/usr/bin/python3"), \
+             patch("builtins.input", return_value="y"), \
+             patch("immich_accelerator.__main__.subprocess.run", side_effect=fake_run):
+            assert _find_ml_dir() == ml
+        assert _requirements_marker(ml).read_text().strip() == \
+            _hash_file(ml / "requirements.txt")
