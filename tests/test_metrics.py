@@ -72,6 +72,33 @@ class TestParsePowermetrics:
             "ane_mw": None,
         }
 
+    def test_nan_idle_ratio_is_none(self):
+        # powermetrics can emit NaN on a cold sample; NaN must not leak into
+        # the JSON (the bare token NaN is invalid JSON and freezes the dash).
+        raw = _plist(gpu={"idle_ratio": float("nan")})
+        assert metrics.parse_powermetrics(raw)["gpu_residency_pct"] is None
+
+    def test_inf_idle_ratio_is_none(self):
+        raw = _plist(gpu={"idle_ratio": float("inf")})
+        assert metrics.parse_powermetrics(raw)["gpu_residency_pct"] is None
+
+    def test_nan_ane_power_is_none(self):
+        raw = _plist(processor={"ane_power": float("nan")})
+        assert metrics.parse_powermetrics(raw)["ane_mw"] is None
+
+    def test_inf_ane_power_is_none(self):
+        raw = _plist(processor={"ane_power": float("-inf")})
+        assert metrics.parse_powermetrics(raw)["ane_mw"] is None
+
+    def test_bool_values_are_none(self):
+        # isinstance(True, (int, float)) is True; a stray bool must not be
+        # treated as a numeric sample.
+        raw = _plist(gpu={"idle_ratio": True}, processor={"ane_power": False})
+        assert metrics.parse_powermetrics(raw) == {
+            "gpu_residency_pct": None,
+            "ane_mw": None,
+        }
+
 
 class TestSudoersContent:
     def test_sudoers_line_targets_wrapper(self):

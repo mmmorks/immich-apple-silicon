@@ -24,9 +24,11 @@ utilization percentage.
 
 from __future__ import annotations
 
+import math
 import plistlib
 import subprocess
 from pathlib import Path
+from typing import TypeGuard
 
 POWERMETRICS_WRAPPER = Path("/usr/local/sbin/immich-accelerator-powermetrics")
 POWERMETRICS_SUDOERS = Path("/etc/sudoers.d/immich-accelerator")
@@ -36,6 +38,17 @@ WRAPPER_CONTENT = "#!/bin/sh\nexec /usr/bin/powermetrics -n 1 -i 1000 --samplers
 
 def sudoers_content(user: str) -> str:
     return f"{user} ALL=(root) NOPASSWD: {POWERMETRICS_WRAPPER}\n"
+
+
+def _finite_number(x) -> TypeGuard[float]:
+    """True only for a real, finite int/float.
+
+    Excludes bools (``isinstance(True, int)`` is True) and NaN/inf —
+    powermetrics can emit NaN on a cold sample, and a NaN serializes as the
+    bare token ``NaN`` (invalid JSON), which freezes the dashboard's status
+    feed. Such values must collapse to None instead.
+    """
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
 
 
 def parse_powermetrics(raw: bytes | str) -> dict:
@@ -57,10 +70,10 @@ def parse_powermetrics(raw: bytes | str) -> dict:
     proc = data.get("processor") or {}
 
     idle = gpu.get("idle_ratio")
-    gpu_residency_pct = round((1.0 - idle) * 100, 2) if isinstance(idle, (int, float)) else None
+    gpu_residency_pct = round((1.0 - idle) * 100, 2) if _finite_number(idle) else None
 
     ane = proc.get("ane_power")
-    ane_mw = float(ane) if isinstance(ane, (int, float)) else None
+    ane_mw = float(ane) if _finite_number(ane) else None
 
     return {"gpu_residency_pct": gpu_residency_pct, "ane_mw": ane_mw}
 
