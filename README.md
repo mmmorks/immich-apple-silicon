@@ -257,7 +257,7 @@ The native worker runs Immich's unmodified code. The ffmpeg and image processing
 | **ML: CLIP** | ONNX Runtime | MLX on Metal GPU | Same model, different runtime. For Immich's default `ViT-SO400M-16-SigLIP2-384` (SigLIP2), a native MLX backend reproduces the server's preprocessing exactly — embeddings are interchangeable with Docker's (image/text cosine ≈1.0000), so no re-index is needed. Other CLIP models are numerically close but not identical (floating-point differences). Search results are equivalent. |
 | **ML: Face detection** | ONNX Runtime | Apple Vision framework (Neural Engine) | Different model entirely. Detection accuracy is comparable; bounding boxes may differ slightly. |
 | **ML: Face recognition** | ONNX Runtime | ONNX Runtime with CoreML | Same model, CoreML acceleration. Numerically close embeddings. |
-| **ML: OCR** | PaddleOCR via ONNX | Apple Vision framework (Neural Engine) | Different engine. Vision framework OCR is generally more accurate for Latin text, may differ for CJK. |
+| **ML: OCR** | PaddleOCR via ONNX | Apple Vision framework (Neural Engine) | Different engine. Vision framework OCR is generally more accurate for Latin text, may differ for CJK. Text-region boxes use the same normalized `[0,1]` 8-coord format as Docker, but Vision only exposes an axis-aligned bounding box, so each box is always a rectangle — rotated/skewed text quadrilaterals that PaddleOCR can return are approximated by their enclosing rectangle. |
 | **ML appliance mode** | ML + worker on one host | ML service only; worker stays on the remote Immich host | Pure HTTP ML endpoint; no shared filesystem needed. |
 
 ### What this means in practice
