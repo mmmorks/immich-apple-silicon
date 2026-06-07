@@ -189,15 +189,20 @@ def get_status(config: dict) -> dict:
         except (ValueError, OSError, subprocess.SubprocessError):
             pass
 
-        # Processing counts
+        # Processing counts. The SELECT emits seven aggregates as one
+        # pipe-delimited row, unpacked positionally below. The column order
+        # here and the unpack order MUST stay in lockstep — reordering one
+        # without the other silently mis-assigns counts. Positions (0-based):
+        #   0 thumbs   1 total   2 clip   3 faces
+        #   4 ocr      5 total_videos     6 encoded_videos
         # Exclude hidden assets (Live Photo motion files) — Immich skips them too
         counts_raw = _query_db(
-            "SELECT COUNT(*) FILTER (WHERE thumbhash IS NOT NULL), COUNT(*), "
-            "(SELECT COUNT(*) FROM smart_search), "
-            '(SELECT COUNT(*) FROM asset_job_status WHERE "facesRecognizedAt" IS NOT NULL), '
-            '(SELECT COUNT(*) FROM asset_job_status WHERE "ocrAt" IS NOT NULL), '
-            "COUNT(*) FILTER (WHERE type = 'VIDEO' AND visibility != 'hidden'), "
-            "(SELECT COUNT(*) FROM asset_file af JOIN asset a ON a.id = af.\"assetId\" WHERE af.type = 'encoded_video' AND a.visibility != 'hidden') "
+            "SELECT COUNT(*) FILTER (WHERE thumbhash IS NOT NULL), COUNT(*), "  # 0 thumbs, 1 total
+            "(SELECT COUNT(*) FROM smart_search), "  # 2 clip
+            '(SELECT COUNT(*) FROM asset_job_status WHERE "facesRecognizedAt" IS NOT NULL), '  # 3 faces
+            '(SELECT COUNT(*) FROM asset_job_status WHERE "ocrAt" IS NOT NULL), '  # 4 ocr
+            "COUNT(*) FILTER (WHERE type = 'VIDEO' AND visibility != 'hidden'), "  # 5 total_videos
+            "(SELECT COUNT(*) FROM asset_file af JOIN asset a ON a.id = af.\"assetId\" WHERE af.type = 'encoded_video' AND a.visibility != 'hidden') "  # 6 encoded_videos
             "FROM asset WHERE \"deletedAt\" IS NULL AND visibility != 'hidden'",
             config,
         )
@@ -207,6 +212,7 @@ def get_status(config: dict) -> dict:
             parts = counts_raw.split("|")
             if len(parts) == 7:
                 with contextlib.suppress(ValueError):
+                    # Order mirrors the SELECT column order documented above.
                     thumbs, total, clip, faces, ocr, total_videos, encoded_videos = [int(p) for p in parts]
 
         # System metrics
@@ -395,19 +401,60 @@ def _tail_text(path: Path, max_bytes: int = 65536) -> str:
         return ""
 
 
-def _count_predicts(path: Path) -> int:
-    """Cumulative count of predict-completion lines across the whole log.
+class _IncrementalPredictCounter:
+    """Cumulative count of predict-completion lines in a growing log.
 
-    Whole-file scan, but only runs on a dashboard cache-miss (every
-    _CACHE_TTL). Needed because the tail window count is not monotonic.
+    A naive full-file scan on every dashboard cache-miss is O(file size) and
+    grows unbounded as ml.log accumulates. Instead we remember a byte offset
+    (always at a line boundary) and a running count, and on each call scan
+    only the bytes appended since last time. The first call reads the whole
+    file once to establish the baseline; subsequent calls read just the tail.
+
+    Truncation/rotation is detected by the file shrinking below our offset, in
+    which case we reset and rescan from the start. A trailing partial line (no
+    newline yet) is left uncounted until its newline arrives, so a line being
+    written mid-scan is never split or double-counted.
     """
-    from .ml_stats import count_predict_lines
 
-    try:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            return count_predict_lines(f)
-    except OSError:
-        return 0
+    def __init__(self) -> None:
+        self._offset = 0  # bytes counted so far (ends at a newline)
+        self._count = 0  # running predict-line total
+
+    def count(self, path: Path) -> int:
+        from .ml_stats import count_predict_lines
+
+        try:
+            with open(path, "rb") as f:
+                f.seek(0, 2)
+                size = f.tell()
+                if size < self._offset:  # truncated/rotated → start over
+                    self._offset = 0
+                    self._count = 0
+                f.seek(self._offset)
+                chunk = f.read(size - self._offset)
+        except OSError:
+            return self._count
+
+        last_nl = chunk.rfind(b"\n")
+        if last_nl == -1:
+            return self._count  # no complete line appended yet
+        complete = chunk[: last_nl + 1].decode("utf-8", "replace")
+        self._count += count_predict_lines(complete.splitlines())
+        self._offset += last_nl + 1
+        return self._count
+
+
+_predict_counter = _IncrementalPredictCounter()
+
+
+def _count_predicts(path: Path) -> int:
+    """Cumulative, monotonic count of predict-completion lines in the log.
+
+    Scans only the bytes appended since the last call (see
+    ``_IncrementalPredictCounter``); the windowed ``parse_ml_log`` total is
+    not cumulative.
+    """
+    return _predict_counter.count(path)
 
 
 def _available_memory_mb() -> int | None:

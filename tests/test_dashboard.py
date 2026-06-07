@@ -12,11 +12,15 @@ httpx = pytest.importorskip("httpx")
 
 from immich_accelerator.dashboard import (
     _get_accelerator_version,
+    _IncrementalPredictCounter,
     _query_db,
     _run,
     create_app,
     get_status,
 )
+
+_PREDICT = "2026-06-06 12:00:01 INFO predict: 1 task(s) [clip] completed in 40ms\n"
+_NOISE = "GET /predict\n"
 
 # ---------------------------------------------------------------------------
 # _get_accelerator_version
@@ -664,3 +668,55 @@ class TestMemoryMetrics:
 
         with patch.object(dash, "_run", return_value=""):
             assert dash._available_memory_mb() is None
+
+
+# ---------------------------------------------------------------------------
+# _IncrementalPredictCounter — tail-only, monotonic predict counting
+# ---------------------------------------------------------------------------
+
+
+class TestIncrementalPredictCounter:
+    def test_counts_full_file_on_first_call(self, tmp_path):
+        log = tmp_path / "ml.log"
+        log.write_text(_PREDICT + _NOISE + _PREDICT)
+        assert _IncrementalPredictCounter().count(log) == 2
+
+    def test_missing_file_returns_zero(self, tmp_path):
+        assert _IncrementalPredictCounter().count(tmp_path / "absent.log") == 0
+
+    def test_only_appended_bytes_are_scanned(self, tmp_path):
+        log = tmp_path / "ml.log"
+        log.write_text(_PREDICT)
+        counter = _IncrementalPredictCounter()
+        assert counter.count(log) == 1
+        # Append two more predicts; re-scanning only the tail must keep it monotonic.
+        with open(log, "a") as f:
+            f.write(_NOISE + _PREDICT + _PREDICT)
+        assert counter.count(log) == 3
+        offset_after = counter._offset
+        # No growth → no re-count and offset unchanged.
+        assert counter.count(log) == 3
+        assert counter._offset == offset_after
+
+    def test_partial_trailing_line_deferred_until_newline(self, tmp_path):
+        log = tmp_path / "ml.log"
+        log.write_text(_PREDICT)
+        counter = _IncrementalPredictCounter()
+        assert counter.count(log) == 1
+        # Write a predict line WITHOUT its trailing newline — not yet complete.
+        partial = "2026-06-06 12:00:02 INFO predict: 1 task(s) [ocr] completed in 9ms"
+        with open(log, "a") as f:
+            f.write(partial)
+        assert counter.count(log) == 1  # held back
+        with open(log, "a") as f:
+            f.write("\n")
+        assert counter.count(log) == 2  # counted once the line completes
+
+    def test_truncation_resets_and_rescans(self, tmp_path):
+        log = tmp_path / "ml.log"
+        log.write_text(_PREDICT + _PREDICT + _PREDICT)
+        counter = _IncrementalPredictCounter()
+        assert counter.count(log) == 3
+        # Log rotated/truncated to a smaller file → count restarts from the new content.
+        log.write_text(_PREDICT)
+        assert counter.count(log) == 1
