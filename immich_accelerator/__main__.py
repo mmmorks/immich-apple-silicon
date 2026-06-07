@@ -2880,22 +2880,23 @@ def _setup_ml_only(args) -> None:
             "ML service unavailable — cannot set up ml-only mode. "
             "Ensure Python 3.11+ and the ml/ submodule are present."
         )
+
+    metrics_ok = _install_powermetrics_sudoers()
+
     config = {
         "mode": "ml-only",
         "ml_dir": str(ml_dir),
-        "ml_host": getattr(args, "host", None) or "0.0.0.0",
-        "ml_port": int(getattr(args, "port", None) or 3003),
-        "metrics_powermetrics": True,
+        "ml_host": args.host,
+        "ml_port": int(args.port),
+        "metrics_powermetrics": metrics_ok,
         "dashboard_port": 8420,
     }
     save_config(config)
     log.info("Wrote ml-only config to %s", CONFIG_FILE)
 
-    if _install_powermetrics_sudoers():
+    if metrics_ok:
         log.info("Real GPU/ANE metrics enabled (powermetrics).")
     else:
-        config["metrics_powermetrics"] = False
-        save_config(config)
         log.warning("Continuing without real GPU/ANE metrics.")
 
     _print_nas_wiring(config["ml_port"])

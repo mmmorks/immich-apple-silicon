@@ -970,3 +970,12 @@ class TestSetupMlOnly:
         with patch("immich_accelerator.__main__._setup_ml_only") as m:
             cmd_setup(args)
         m.assert_called_once_with(args)
+
+    def test_raises_when_ml_dir_unavailable(self, tmp_data_dir):
+        from immich_accelerator.__main__ import _setup_ml_only
+        args = argparse.Namespace(ml_only=True, port=3003, host="0.0.0.0",
+                                  url=None, api_key=None, manual=False,
+                                  import_server=None)
+        with patch("immich_accelerator.__main__._find_ml_dir", return_value=None):
+            with pytest.raises(RuntimeError):
+                _setup_ml_only(args)
