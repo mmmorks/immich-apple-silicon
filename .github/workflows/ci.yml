@@ -9,17 +9,18 @@ on:
   # commit. Also drives the heavy nightly tier on demand.
   workflow_dispatch:
   schedule:
-    # 09:00 UTC daily. Gives a daily fidelity signal even on days with no
-    # merges, and is when the heavy jobs (gated below) run unattended.
+    # 09:00 UTC daily — when the heavy jobs (gated below) run unattended for a
+    # daily fidelity signal.
     - cron: "0 9 * * *"
 
 # CI tiers:
-#   Per-PR (fast gate): lint, secrets-scan, ml-tests. Run on every event,
-#     including pull_request — keeps PR feedback quick.
-#   Heavy (fresh-install-macos, fresh-install-docker): skipped on pull_request
-#     to keep PR latency low. Still run on push to main (so they gate releases
-#     via auto-tag), on the nightly schedule, and on manual dispatch. Future
-#     real-weight parity / self-hosted Vision jobs belong on this tier too.
+#   Fast gate: lint, secrets-scan, ml-tests. Run on every event (pull_request
+#     and direct pushes to main) — keeps day-to-day feedback quick.
+#   Heavy (fresh-install-macos, fresh-install-docker): run on the nightly
+#     schedule and manual dispatch ONLY. We commit directly to main, so gating
+#     on `push` would still run them on nearly every commit; nightly + manual
+#     keeps the common path fast while preserving a daily fidelity signal.
+#     Future real-weight parity / self-hosted Vision jobs belong on this tier.
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -70,15 +71,9 @@ jobs:
     # it reaches users. The slow marker enables the venv+pip
     # integration test that builds a pristine fastapi+uvicorn env.
     #
-    # EMERGENCY OVERRIDE: if macos-26 runners become flaky and this
-    # blocks a release, trigger `update-homebrew.yml` manually via
-    # `gh workflow run update-homebrew.yml -f tag=vX.Y.Z` — that
-    # workflow bypasses CI entirely.
-    #
-    # Heavy tier: skipped on pull_request to keep PR latency low. Runs on push
-    # to main (gates releases via auto-tag), the nightly schedule, and manual
-    # dispatch.
-    if: github.event_name != 'pull_request'
+    # Heavy tier: runs on the nightly schedule and manual dispatch only — not on
+    # pull_request or push — so direct commits to main stay fast.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v5
@@ -133,10 +128,9 @@ jobs:
     # Immich stack, validates API + detection. Runs on Ubuntu where
     # Docker is pre-installed (macOS runners can't run Docker VMs).
     #
-    # Heavy tier: skipped on pull_request to keep PR latency low. Runs on push
-    # to main (gates releases via auto-tag), the nightly schedule, and manual
-    # dispatch.
-    if: github.event_name != 'pull_request'
+    # Heavy tier: runs on the nightly schedule and manual dispatch only — not on
+    # pull_request or push — so direct commits to main stay fast.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -201,70 +195,3 @@ jobs:
       - name: Tear down
         if: always()
         run: cd /tmp/fresh-install-ci && docker compose down -v 2>/dev/null || true
-
-  auto-tag:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [lint, secrets-scan, fresh-install-macos, ml-tests, fresh-install-docker]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      actions: write
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-      - name: Check for version bump and tag
-        id: tag
-        run: |
-          VERSION=$(cat VERSION | tr -d '[:space:]')
-          if git rev-parse "v${VERSION}" >/dev/null 2>&1; then
-            echo "Tag v${VERSION} already exists — skipping"
-            echo "created=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "New version ${VERSION} — creating tag"
-            git tag "v${VERSION}"
-            git push origin "v${VERSION}"
-            echo "created=true" >> "$GITHUB_OUTPUT"
-            echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Create draft release with changelog
-        if: steps.tag.outputs.created == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG_NAME: ${{ steps.tag.outputs.tag }}
-        run: |
-          VERSION="${TAG_NAME#v}"
-          # Find the previous release tag to capture all changelog sections since then
-          PREV_TAG=$(git tag --sort=-v:refname | grep '^v' | sed -n '2p')
-          PREV_VERSION="${PREV_TAG#v}"
-          if [ -n "$PREV_VERSION" ]; then
-            # Extract all changelog sections from current version down to previous release
-            NOTES=$(awk "/^## ${PREV_VERSION}[[:space:]]/{exit} /^## ${VERSION}[[:space:]]/{found=1; next} found{print}" CHANGELOG.md)
-          else
-            # First release — grab everything after the first ## heading
-            NOTES=$(awk "/^## ${VERSION}[[:space:]]/{found=1; next} found{print}" CHANGELOG.md)
-          fi
-          if [ -z "$NOTES" ]; then
-            NOTES="Release ${TAG_NAME}"
-          fi
-          cat > /tmp/release-notes.md << ENDNOTES
-          ${NOTES}
-
-          ### Upgrade
-          \`\`\`bash
-          brew upgrade immich-accelerator
-          immich-accelerator setup   # if first time or new features require it
-          \`\`\`
-          ENDNOTES
-          sed -i 's/^          //' /tmp/release-notes.md
-          gh release create "${TAG_NAME}" \
-            --latest \
-            --title "Immich Accelerator ${TAG_NAME}" \
-            --notes-file /tmp/release-notes.md
-      - name: Trigger Homebrew formula update
-        if: steps.tag.outputs.created == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG_NAME: ${{ steps.tag.outputs.tag }}
-        run: |
-          gh workflow run update-homebrew.yml -f tag="$TAG_NAME"
