@@ -3448,27 +3448,34 @@ def cmd_stop(_args):
 
 
 def cmd_status(_args):
+    config = load_config() if CONFIG_FILE.exists() else {}
+
+    if config.get("mode") == "ml-only":
+        ml_pid = read_pid("ml")
+        log.info("Mode:       ml-only (ML appliance)")
+        log.info("ML service: %s",
+                 f"running (PID {ml_pid})" if ml_pid else "stopped")
+        log.info("Endpoint:   http://%s:%s",
+                 config.get("ml_host", "0.0.0.0"), config.get("ml_port", 3003))
+        return
+
     worker_pid = read_pid("worker")
     ml_pid = read_pid("ml")
-
     if not worker_pid and not ml_pid:
         log.info("Not running")
         return
-
-    log.info(
-        "Worker:     %s", f"running (PID {worker_pid})" if worker_pid else "stopped"
-    )
+    log.info("Worker:     %s",
+             f"running (PID {worker_pid})" if worker_pid else "stopped")
     log.info("ML service: %s", f"running (PID {ml_pid})" if ml_pid else "stopped")
-
-    if CONFIG_FILE.exists():
-        config = load_config()
+    if config:
         log.info("Version:    %s", config.get("version", "?"))
         if config.get("ffmpeg_path"):
             log.info("FFmpeg:     %s (VideoToolbox)", config["ffmpeg_path"])
 
 
 def cmd_logs(args):
-    target = args.service or "worker"
+    default = "ml" if (CONFIG_FILE.exists() and load_config().get("mode") == "ml-only") else "worker"
+    target = args.service or default
     log_file = LOG_DIR / f"{target}.log"
     if not log_file.exists():
         print(f"No log file: {log_file}")
@@ -3516,11 +3523,38 @@ def cmd_update(_args):
     log.info("Updated to %s. Run: python -m immich_accelerator start", running)
 
 
+def _watch_ml_only() -> None:
+    """KeepAlive monitor for appliance mode: ML service + dashboard only."""
+    log.info("Watching ML appliance (Ctrl+C to stop)...")
+    config = load_config()
+    if not read_pid("ml"):
+        log.info("ML not running, starting...")
+        cmd_start(argparse.Namespace(force=True))
+    _ensure_dashboard_running(config)
+    while True:
+        try:
+            time.sleep(30)
+            config = load_config()
+            if not read_pid("ml"):
+                log.warning("ML service not running — restarting...")
+                try:
+                    _start_ml_only(config, argparse.Namespace(force=True))
+                except RuntimeError:
+                    log.error("  ML restart failed, will retry in 30s")
+            _ensure_dashboard_running(config)
+        except KeyboardInterrupt:
+            log.info("Watch stopped")
+            return
+
+
 def cmd_watch(_args):
     """Monitor services and restart on crash. Detects Docker updates.
 
     Suitable for launchd KeepAlive — runs forever, checking every 30s.
     """
+    if load_config().get("mode") == "ml-only":
+        return _watch_ml_only()
+
     log.info("Watching services (Ctrl+C to stop)...")
 
     # First ensure everything is running

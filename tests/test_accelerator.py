@@ -1035,3 +1035,31 @@ class TestStartMlOnly:
              patch("immich_accelerator.__main__._ensure_dashboard_running"):
             with pytest.raises(RuntimeError):
                 _start_ml_only(config, argparse.Namespace(force=False))
+
+
+class TestMlOnlyCommands:
+    def test_watch_dispatches_to_ml_only(self, tmp_data_dir):
+        from immich_accelerator.__main__ import cmd_watch, save_config
+        save_config({"mode": "ml-only", "ml_dir": "/x", "ml_port": 3003})
+        with patch("immich_accelerator.__main__._watch_ml_only") as m:
+            cmd_watch(None)
+        m.assert_called_once()
+
+    def test_status_ml_only_reports_endpoint(self, tmp_data_dir, capsys, caplog):
+        import logging
+        from immich_accelerator.__main__ import cmd_status, save_config
+        save_config({"mode": "ml-only", "ml_host": "0.0.0.0", "ml_port": 3003})
+        with patch("immich_accelerator.__main__.read_pid", return_value=1234), \
+             caplog.at_level(logging.INFO):
+            cmd_status(None)
+        text = caplog.text
+        assert "ml-only" in text
+        assert "3003" in text
+
+    def test_logs_defaults_to_ml_in_ml_only(self, tmp_data_dir):
+        from immich_accelerator.__main__ import cmd_logs, save_config, LOG_DIR
+        save_config({"mode": "ml-only", "ml_port": 3003})
+        # no ml.log present -> prints "No log file" and returns (no exec)
+        with patch("immich_accelerator.__main__.os.execvp") as ex:
+            cmd_logs(argparse.Namespace(service=None))
+        ex.assert_not_called()
