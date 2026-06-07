@@ -3487,6 +3487,10 @@ def cmd_logs(args):
 
 def cmd_update(_args):
     config = load_config()
+    if config.get("mode") == "ml-only":
+        log.info("update is not applicable in ml-only mode (no Immich server is managed here).")
+        log.info("To update the ML service, update the ml/ submodule, then re-run: immich-accelerator setup --ml-only")
+        return
     docker = find_docker()
     immich = detect_immich(docker)
 

@@ -441,7 +441,7 @@ def get_status_ml(config: dict) -> dict:
         "hardware": {
             "gpu_residency_pct": pm.get("gpu_residency_pct") if pm else None,
             "ane_mw": pm.get("ane_mw") if pm else None,
-            "powermetrics": bool(pm),
+            "powermetrics": bool(pm and (pm.get("gpu_residency_pct") is not None or pm.get("ane_mw") is not None)),
         },
         "system": _system_metrics(),
         "version": config.get("version", "—"),

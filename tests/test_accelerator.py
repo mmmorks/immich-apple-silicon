@@ -1076,3 +1076,12 @@ class TestMlOnlyCommands:
             cmd_logs(argparse.Namespace(service=None))
         ex.assert_not_called()
         assert "ml.log" in capsys.readouterr().out
+
+
+class TestUpdateMlOnly:
+    def test_update_noop_in_ml_only(self, tmp_data_dir):
+        from immich_accelerator.__main__ import cmd_update, save_config
+        save_config({"mode": "ml-only", "ml_port": 3003})
+        with patch("immich_accelerator.__main__.find_docker") as fd:
+            cmd_update(None)
+        fd.assert_not_called()

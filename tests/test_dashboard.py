@@ -482,3 +482,20 @@ class TestGetStatusMl:
              patch("urllib.request.urlopen", side_effect=Exception):
             out = dash.get_status({"mode": "full"})
         assert out["mode"] == "full"
+
+    def test_powermetrics_flag_false_when_no_values(self):
+        import immich_accelerator.dashboard as dash
+        with patch.object(dash, "_tail_text", return_value=""), \
+             patch.object(dash, "_count_predicts", return_value=0), \
+             patch.object(dash, "_ping_ml", return_value=True), \
+             patch("immich_accelerator.metrics.sample_powermetrics",
+                   return_value={"gpu_residency_pct": None, "ane_mw": None}), \
+             patch.object(dash, "_system_metrics",
+                          return_value={"load_1m": 0, "mem_total_gb": 24.0, "cpus": 10}):
+            dash._ml_cache = None
+            dash._ml_cache_ts = 0
+            dash._ml_last_total = 0
+            dash._ml_last_ts = 0.0
+            out = dash.get_status_ml({"mode": "ml-only", "ml_host": "0.0.0.0", "ml_port": 3003, "metrics_powermetrics": True})
+        assert out["hardware"]["powermetrics"] is False
+        assert out["hardware"]["gpu_residency_pct"] is None
