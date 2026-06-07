@@ -10,6 +10,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import logging
 import os
@@ -19,8 +20,11 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
+
+from . import metrics
 
 
 def _read_version() -> str:
@@ -2863,6 +2867,62 @@ def _find_ml_dir() -> Path | None:
 
     log.info("  ML service ready")
     return ml_dir
+
+
+def _install_powermetrics_sudoers() -> bool:
+    """Install the root-owned powermetrics wrapper + a scoped NOPASSWD
+    sudoers rule. Returns True on success. Requires interactive sudo
+    (the user is prompted once)."""
+    user = getpass.getuser()
+    wrapper = metrics.POWERMETRICS_WRAPPER
+    sudoers = metrics.POWERMETRICS_SUDOERS
+
+    with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as wf:
+        wf.write(metrics.WRAPPER_CONTENT)
+        wtmp = wf.name
+    with tempfile.NamedTemporaryFile("w", suffix=".sudoers", delete=False) as sf:
+        sf.write(metrics.sudoers_content(user))
+        stmp = sf.name
+
+    log.info("Configuring powermetrics access (sudo required, one time)...")
+    try:
+        chk = subprocess.run(
+            ["sudo", "visudo", "-cf", stmp], capture_output=True, text=True
+        )
+        if chk.returncode != 0:
+            log.error("sudoers validation failed: %s", chk.stderr.strip())
+            return False
+        subprocess.run(
+            ["sudo", "install", "-d", "-m", "755", "-o", "root", "-g", "wheel",
+             str(wrapper.parent)],
+            check=True,
+        )
+        subprocess.run(
+            ["sudo", "install", "-m", "755", "-o", "root", "-g", "wheel",
+             wtmp, str(wrapper)],
+            check=True,
+        )
+        subprocess.run(
+            ["sudo", "install", "-m", "440", "-o", "root", "-g", "wheel",
+             stmp, str(sudoers)],
+            check=True,
+        )
+        return True
+    except subprocess.CalledProcessError as e:
+        log.error("powermetrics setup failed: %s", e)
+        return False
+    finally:
+        for p in (wtmp, stmp):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+
+
+def _remove_powermetrics_sudoers() -> None:
+    """Remove the powermetrics wrapper + sudoers rule (best effort)."""
+    for p in (metrics.POWERMETRICS_SUDOERS, metrics.POWERMETRICS_WRAPPER):
+        subprocess.run(["sudo", "rm", "-f", str(p)], capture_output=True)
 
 
 _STALE_WORKER_RE = _WORKER_CMD_RE  # same pattern, used by _kill_stale_processes + tests

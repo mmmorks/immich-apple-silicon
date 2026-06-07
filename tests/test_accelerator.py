@@ -846,3 +846,53 @@ class TestMainDispatch:
             "immich_accelerator.__main__.cmd_stop", side_effect=KeyboardInterrupt
         ):
             main()  # Should not raise
+
+
+class TestPowermetricsInstaller:
+    def test_validates_sudoers_before_install(self, tmp_path):
+        import immich_accelerator.metrics as metrics
+        from immich_accelerator.__main__ import _install_powermetrics_sudoers
+
+        calls = []
+
+        def fake_run(cmd, *a, **k):
+            calls.append(cmd)
+            return MagicMock(returncode=0, stderr="", stdout="")
+
+        with patch("immich_accelerator.__main__.subprocess.run", side_effect=fake_run), \
+             patch("immich_accelerator.__main__.getpass.getuser", return_value="bob"):
+            ok = _install_powermetrics_sudoers()
+
+        assert ok is True
+        # visudo -cf must run before any `install` of the sudoers file
+        joined = [" ".join(map(str, c)) for c in calls]
+        visudo_idx = next(i for i, c in enumerate(joined) if "visudo -cf" in c)
+        install_sudoers_idx = next(
+            i for i, c in enumerate(joined)
+            if "install" in c and str(metrics.POWERMETRICS_SUDOERS) in c
+        )
+        assert visudo_idx < install_sudoers_idx
+
+    def test_aborts_when_visudo_fails(self):
+        from immich_accelerator.__main__ import _install_powermetrics_sudoers
+
+        def fake_run(cmd, *a, **k):
+            if "visudo" in cmd:
+                return MagicMock(returncode=1, stderr="bad", stdout="")
+            return MagicMock(returncode=0, stderr="", stdout="")
+
+        with patch("immich_accelerator.__main__.subprocess.run", side_effect=fake_run), \
+             patch("immich_accelerator.__main__.getpass.getuser", return_value="bob"):
+            assert _install_powermetrics_sudoers() is False
+
+    def test_remove_deletes_both_paths(self):
+        import immich_accelerator.metrics as metrics
+        from immich_accelerator.__main__ import _remove_powermetrics_sudoers
+
+        removed = []
+        with patch("immich_accelerator.__main__.subprocess.run",
+                   side_effect=lambda cmd, *a, **k: removed.append(cmd) or MagicMock(returncode=0)):
+            _remove_powermetrics_sudoers()
+        targets = {c[-1] for c in removed}
+        assert str(metrics.POWERMETRICS_WRAPPER) in targets
+        assert str(metrics.POWERMETRICS_SUDOERS) in targets
