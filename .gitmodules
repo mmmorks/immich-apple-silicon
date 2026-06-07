@@ -1,3 +1,4 @@
 [submodule "ml"]
 	path = ml
-	url = https://github.com/epheterson/immich-ml-metal.git
+	url = git@github.com:mmmorks/immich-ml-metal.git
+	# Fork of upstream epheterson/immich-ml-metal; commit ML changes here, PR upstream.
