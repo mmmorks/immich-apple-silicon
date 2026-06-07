@@ -3529,24 +3529,7 @@ def cmd_watch(_args):
         cmd_start(argparse.Namespace(force=True))
 
     # Start dashboard in background if not already running
-    try:
-        config = load_config()
-        import urllib.request as _urlreq
-
-        _urlreq.urlopen("http://localhost:8420/", timeout=2)
-    except Exception:
-        LOG_DIR.mkdir(parents=True, exist_ok=True)
-        dash_log = open(LOG_DIR / "dashboard.log", "a")
-        proc = subprocess.Popen(
-            [sys.executable, "-m", __package__ or "immich_accelerator", "dashboard"],
-            cwd=str(Path(__file__).parent.parent),
-            stdout=dash_log,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-        dash_log.close()
-        write_pid("dashboard", proc.pid)
-        log.info("Dashboard started: http://localhost:8420")
+    _ensure_dashboard_running(load_config())
 
     # Warn if auto-update won't work for remote setups
     _watch_config = load_config()

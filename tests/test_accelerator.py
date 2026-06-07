@@ -1012,3 +1012,26 @@ class TestStartMlOnly:
         assert env["ML_HOST"] == "0.0.0.0"
         assert env["ML_PORT"] == "3055"
         assert cwd == str(ml)
+
+    def test_start_ml_only_force_restarts(self, tmp_data_dir, tmp_path):
+        from immich_accelerator.__main__ import _start_ml_only
+        ml = self._make_ml_dir(tmp_path)
+        config = {"mode": "ml-only", "ml_dir": str(ml), "ml_host": "0.0.0.0", "ml_port": 3003}
+        with patch("immich_accelerator.__main__._kill_stale_processes"), \
+             patch("immich_accelerator.__main__.read_pid", return_value=999), \
+             patch("immich_accelerator.__main__.kill_pid") as kp, \
+             patch("immich_accelerator.__main__._ensure_dashboard_running"), \
+             patch("immich_accelerator.__main__.start_service", return_value=1):
+            _start_ml_only(config, argparse.Namespace(force=True))
+        kp.assert_called_once_with("ml")
+
+    def test_start_ml_only_raises_when_venv_missing(self, tmp_data_dir, tmp_path):
+        from immich_accelerator.__main__ import _start_ml_only
+        config = {"mode": "ml-only", "ml_dir": str(tmp_path / "nope"),
+                  "ml_host": "0.0.0.0", "ml_port": 3003}
+        with patch("immich_accelerator.__main__._kill_stale_processes"), \
+             patch("immich_accelerator.__main__.read_pid", return_value=None), \
+             patch("immich_accelerator.__main__._find_ml_dir", return_value=None), \
+             patch("immich_accelerator.__main__._ensure_dashboard_running"):
+            with pytest.raises(RuntimeError):
+                _start_ml_only(config, argparse.Namespace(force=False))
