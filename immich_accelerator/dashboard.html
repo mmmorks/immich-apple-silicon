@@ -303,6 +303,7 @@
         <div class="task-stats" style="flex-direction:column; align-items:flex-start; gap:4px;">
           <span>Endpoint: <span class="v" id="ml-endpoint" style="color:var(--text-dim)">—</span></span>
           <span>Throughput: <span class="v" id="ml-throughput" style="color:var(--text-dim)">—</span></span>
+          <span>Total: <span class="v" id="ml-predicts" style="color:var(--text-dim)">—</span></span>
           <span>Latency: <span class="v" id="ml-latency" style="color:var(--text-dim)">—</span></span>
           <span>Model: <span class="v" id="ml-model" style="color:var(--text-dim)">—</span></span>
           <span>Health: <span class="v" id="ml-health-status" style="color:var(--text-dim)">—</span></span>
@@ -606,6 +607,7 @@ function renderMl(data) {
   setText('ml-endpoint', ml.endpoint || '');
   setText('ml-throughput', (ml.throughput_rps != null ? ml.throughput_rps : 0).toFixed(2) + ' req/s'
     + (ml.last_activity_age_s != null ? ' · ' + fmtAge(ml.last_activity_age_s) + ' ago' : ''));
+  setText('ml-predicts', (ml.total_predicts != null ? ml.total_predicts : 0).toLocaleString() + ' predicts');
   setText('ml-latency', 'p50 ' + (lat.p50 != null ? lat.p50 : 0)
     + ' · p95 ' + (lat.p95 != null ? lat.p95 : 0)
     + ' · max ' + (lat.max != null ? lat.max : 0) + ' ms');
