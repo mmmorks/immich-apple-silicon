@@ -153,7 +153,6 @@ jobs:
           .venv/bin/pip install --upgrade pip
           .venv/bin/pip install -r requirements.txt
       - name: Cache pinned model weights
-        id: weights-cache
         uses: actions/cache@v4
         with:
           # The three on-disk locations the parity backends load from. Keyed on
@@ -164,13 +163,21 @@ jobs:
             ~/.cache/huggingface/hub
             ~/.insightface
           key: ml-parity-weights-${{ hashFiles('ml/ci/parity_weights.lock.json') }}
-      - name: Install torch (cold cache only — convert-only OpenAI-CLIP port)
+      - name: Install torch if a one-time OpenAI-CLIP convert is needed
         # torch is NOT in requirements.txt (default installs are torch-free). It
-        # is needed solely to convert the OpenAI-CLIP pickle to MLX on a cold
-        # weight cache; warm runs restore the converted weights and skip this.
-        if: steps.weights-cache.outputs.cache-hit != 'true'
+        # is needed solely to convert the OpenAI-CLIP pickle to MLX when the
+        # converted weights aren't already present; a warm cache restores them
+        # and this stays skipped. Gate on the converted dir (not the cache-hit
+        # flag) so a partial cache — weights present but no convert — still
+        # installs torch instead of failing the gate.
         working-directory: ml
-        run: .venv/bin/pip install "torch>=2.2.0"
+        run: |
+          if [ -d models/mlx_clip-openai__clip-vit-base-patch32 ]; then
+            echo "Converted OpenAI-CLIP weights present — staying torch-free."
+          else
+            echo "Converted OpenAI-CLIP weights absent — installing torch for the one-time convert."
+            .venv/bin/pip install "torch>=2.2.0"
+          fi
       - name: Fetch + verify pinned weights
         working-directory: ml
         run: .venv/bin/python ci/fetch_parity_weights.py
