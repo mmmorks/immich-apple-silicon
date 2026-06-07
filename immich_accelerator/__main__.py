@@ -2877,15 +2877,16 @@ def _install_powermetrics_sudoers() -> bool:
     wrapper = metrics.POWERMETRICS_WRAPPER
     sudoers = metrics.POWERMETRICS_SUDOERS
 
-    with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as wf:
-        wf.write(metrics.WRAPPER_CONTENT)
-        wtmp = wf.name
-    with tempfile.NamedTemporaryFile("w", suffix=".sudoers", delete=False) as sf:
-        sf.write(metrics.sudoers_content(user))
-        stmp = sf.name
-
+    wtmp = stmp = None
     log.info("Configuring powermetrics access (sudo required, one time)...")
     try:
+        with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as wf:
+            wf.write(metrics.WRAPPER_CONTENT)
+            wtmp = wf.name
+        with tempfile.NamedTemporaryFile("w", suffix=".sudoers", delete=False) as sf:
+            sf.write(metrics.sudoers_content(user))
+            stmp = sf.name
+
         chk = subprocess.run(
             ["sudo", "visudo", "-cf", stmp], capture_output=True, text=True
         )
@@ -2913,10 +2914,11 @@ def _install_powermetrics_sudoers() -> bool:
         return False
     finally:
         for p in (wtmp, stmp):
-            try:
-                os.unlink(p)
-            except OSError:
-                pass
+            if p:
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
 
 
 def _remove_powermetrics_sudoers() -> None:

@@ -876,7 +876,9 @@ class TestPowermetricsInstaller:
     def test_aborts_when_visudo_fails(self):
         from immich_accelerator.__main__ import _install_powermetrics_sudoers
 
+        calls = []
         def fake_run(cmd, *a, **k):
+            calls.append(cmd)
             if "visudo" in cmd:
                 return MagicMock(returncode=1, stderr="bad", stdout="")
             return MagicMock(returncode=0, stderr="", stdout="")
@@ -884,6 +886,7 @@ class TestPowermetricsInstaller:
         with patch("immich_accelerator.__main__.subprocess.run", side_effect=fake_run), \
              patch("immich_accelerator.__main__.getpass.getuser", return_value="bob"):
             assert _install_powermetrics_sudoers() is False
+        assert not any("install" in " ".join(map(str, c)) for c in calls)
 
     def test_remove_deletes_both_paths(self):
         import immich_accelerator.metrics as metrics
@@ -893,6 +896,8 @@ class TestPowermetricsInstaller:
         with patch("immich_accelerator.__main__.subprocess.run",
                    side_effect=lambda cmd, *a, **k: removed.append(cmd) or MagicMock(returncode=0)):
             _remove_powermetrics_sudoers()
-        targets = {c[-1] for c in removed}
-        assert str(metrics.POWERMETRICS_WRAPPER) in targets
+        targets = [c[-1] for c in removed]
         assert str(metrics.POWERMETRICS_SUDOERS) in targets
+        assert str(metrics.POWERMETRICS_WRAPPER) in targets
+        # sudoers (privilege grant) must be removed before the wrapper binary
+        assert targets.index(str(metrics.POWERMETRICS_SUDOERS)) < targets.index(str(metrics.POWERMETRICS_WRAPPER))
