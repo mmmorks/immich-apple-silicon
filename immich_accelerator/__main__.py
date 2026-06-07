@@ -2927,6 +2927,33 @@ def _remove_powermetrics_sudoers() -> None:
         subprocess.run(["sudo", "rm", "-f", str(p)], capture_output=True)
 
 
+def _detect_lan_ip() -> str | None:
+    """Best-effort LAN IPv4 for this Mac (en0 then en1)."""
+    for iface in ("en0", "en1"):
+        try:
+            r = subprocess.run(
+                ["ipconfig", "getifaddr", iface],
+                capture_output=True, text=True, timeout=3,
+            )
+            ip = r.stdout.strip()
+            if r.returncode == 0 and ip:
+                return ip
+        except (subprocess.SubprocessError, OSError):
+            pass
+    return None
+
+
+def _print_nas_wiring(port: int) -> None:
+    """Print the exact change to make on the NAS / remote Immich host."""
+    ip = _detect_lan_ip() or "<this-mac-LAN-ip>"
+    log.info("")
+    log.info("On your NAS (remote Immich), point ML at this Mac:")
+    log.info("  IMMICH_MACHINE_LEARNING_URL=http://%s:%d", ip, port)
+    log.info("Then stop the old Docker ML container:")
+    log.info("  docker stop immich-machine-learning  (or remove it from compose)")
+    log.info("")
+
+
 _STALE_WORKER_RE = _WORKER_CMD_RE  # same pattern, used by _kill_stale_processes + tests
 _STALE_ML_RE = re.compile(r"(?:^|/)python[\d.]*\b.*\s-m\s+src\.main(?:\s|$)")
 

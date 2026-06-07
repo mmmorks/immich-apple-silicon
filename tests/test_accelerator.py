@@ -901,3 +901,22 @@ class TestPowermetricsInstaller:
         assert str(metrics.POWERMETRICS_WRAPPER) in targets
         # sudoers (privilege grant) must be removed before the wrapper binary
         assert targets.index(str(metrics.POWERMETRICS_SUDOERS)) < targets.index(str(metrics.POWERMETRICS_WRAPPER))
+
+
+class TestLanIp:
+    def test_returns_first_iface_with_address(self):
+        from immich_accelerator.__main__ import _detect_lan_ip
+
+        def fake_run(cmd, *a, **k):
+            iface = cmd[-1]
+            out = "192.168.1.42\n" if iface == "en0" else ""
+            return MagicMock(returncode=0, stdout=out)
+
+        with patch("immich_accelerator.__main__.subprocess.run", side_effect=fake_run):
+            assert _detect_lan_ip() == "192.168.1.42"
+
+    def test_returns_none_when_no_address(self):
+        from immich_accelerator.__main__ import _detect_lan_ip
+        with patch("immich_accelerator.__main__.subprocess.run",
+                   return_value=MagicMock(returncode=1, stdout="")):
+            assert _detect_lan_ip() is None
