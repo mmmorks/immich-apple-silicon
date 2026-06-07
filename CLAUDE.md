@@ -5,7 +5,10 @@
 - This repo (`mmmorks/immich-apple-silicon`) and its `ml` submodule (`mmmorks/immich-ml-metal`)
   are our forks — we own `main` in both. No external approval is needed to merge or push;
   follow the active profile below for *when* to commit/push (default: when asked).
-- Work on branches for non-trivial changes; squash merge to main (one clean commit per release).
+- Commit directly to `main` — do not create feature branches.
+- After committing changes inside the `ml` submodule, bump the submodule pointer in
+  this parent repo (`git add ml && git commit`) so the parent records the new `ml` SHA.
+  A submodule commit alone leaves the parent pointing at the old revision.
 - Version bump + CHANGELOG entry required for every release to main.
 - Tag releases as `vX.Y.Z` matching the VERSION file.
 - Each fork has an `upstream` remote pointing at the original `epheterson/*` repo. To contribute
