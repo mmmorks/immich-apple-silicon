@@ -1332,6 +1332,66 @@ def _adopt_live_worker() -> int | None:
 # but unreaped child (a zombie) as alive.
 _OWNED_PROCS: dict[str, subprocess.Popen] = {}
 
+# Consecutive timed-out dashboard probes tolerated before we treat the
+# dashboard as down and respawn it. A single slow probe against the busy
+# single-threaded dashboard is not proof of death — tearing it down on one
+# is what produced endless respawn churn. Definite failures (an error status,
+# a refused/unreachable connection) still act immediately; only an ambiguous
+# timeout is debounced.
+_DASH_UNHEALTHY_THRESHOLD = 2
+_DASH_PROBE_MISSES = 0
+
+
+def _listening_pids(port: int) -> list[int]:
+    """PIDs holding a LISTEN socket on the given TCP port (via lsof)."""
+    try:
+        r = subprocess.run(
+            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    pids = []
+    for tok in r.stdout.split():
+        with contextlib.suppress(ValueError):
+            pids.append(int(tok))
+    return pids
+
+
+def _reclaim_tcp_port(port: int) -> None:
+    """Kill whatever is actually listening on ``port`` and wait for it to exit.
+
+    The recorded dashboard pid is frequently a corpse from an earlier failed
+    spawn while a *different*, older process still holds the port, so killing
+    only the pidfile pid leaves the port bound and the fresh spawn dies on
+    bind. This reclaims the port from its real owner. SIGTERM first, escalate
+    to SIGKILL for survivors.
+    """
+    pids = _listening_pids(port)
+    if not pids:
+        return
+    for pid in pids:
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGTERM)
+    # Wait up to ~5s for the listeners to actually exit before escalating.
+    for _ in range(50):
+        time.sleep(0.1)
+        alive = []
+        for pid in pids:
+            try:
+                os.kill(pid, 0)
+                alive.append(pid)
+            except OSError:
+                pass
+        if not alive:
+            return
+        pids = alive
+    for pid in pids:
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGKILL)
+
 
 def _reap_if_child(pid: int) -> None:
     """Reap ``pid`` if it is a zombie child of this process; ignore otherwise."""
@@ -3033,32 +3093,66 @@ def _ensure_dashboard_running(config: dict) -> None:
 
     Only a 2xx on GET / counts as healthy. A non-2xx — e.g. a wedged process
     that 500s on every request because its source directory was deleted out
-    from under it — is treated as unhealthy: the recorded dashboard is killed
-    and a fresh one spawned. A wedged dashboard keeps the port bound while it
-    500s forever, so we must reclaim the port (kill_pid) before respawning or
-    the new process can't bind it; an unanswered probe (connection refused /
-    timeout) likewise falls through to a respawn.
+    from under it — is treated as unhealthy: the real port owner is killed and
+    a fresh one spawned. A *timed-out* probe is ambiguous (the single-threaded
+    dashboard may just be busy), so it is debounced over
+    ``_DASH_UNHEALTHY_THRESHOLD`` consecutive misses rather than triggering an
+    immediate teardown — tearing a healthy-but-busy dashboard down on one slow
+    probe is what produced endless respawn churn. Definite failures (an error
+    status, a refused/unreachable connection) act immediately.
+
+    A wedged dashboard keeps the port bound, and the recorded pid is often a
+    corpse from an earlier failed spawn, so we reclaim the port from its *real*
+    listener (not just the pidfile pid) before respawning, and we never leave a
+    dead child's pid in the pidfile.
     """
     import urllib.error as _urlerr
     import urllib.request as _urlreq
 
+    global _DASH_PROBE_MISSES
+
     port = int(config.get("dashboard_port", 8420))
+
+    healthy = False
+    slow = False  # a timeout: the server may be busy, not down
     try:
         resp = _urlreq.urlopen(f"http://localhost:{port}/", timeout=2)
-        if 200 <= getattr(resp, "status", 0) < 300:
-            return  # already up and serving
-        # A non-2xx that somehow didn't raise — treat as unhealthy below.
+        healthy = 200 <= getattr(resp, "status", 0) < 300
+        # A non-2xx that somehow didn't raise falls through as unhealthy below.
     except _urlerr.HTTPError:
-        # The server answered with an error status (e.g. a wedged 500). It's up
-        # enough to hold the port but not serving — replace it.
+        # Answered with an error status (e.g. a wedged 500): up enough to hold
+        # the port but not serving. It won't self-heal — replace it now.
         pass
+    except TimeoutError:
+        slow = True
+    except _urlerr.URLError as e:
+        # A timed-out connection is ambiguous; a refused/unreachable one is not.
+        slow = isinstance(e.reason, TimeoutError)
     except Exception:
-        # Connection refused / timeout — nothing is listening.
         pass
 
-    # Reclaim the port from any wedged or stale dashboard before respawning so
-    # the fresh process can bind it (a no-op if nothing is recorded/alive).
+    if healthy:
+        _DASH_PROBE_MISSES = 0
+        return
+
+    if slow:
+        _DASH_PROBE_MISSES += 1
+        if _DASH_PROBE_MISSES < _DASH_UNHEALTHY_THRESHOLD:
+            log.debug(
+                "Dashboard slow to answer (%d/%d) — not respawning yet",
+                _DASH_PROBE_MISSES,
+                _DASH_UNHEALTHY_THRESHOLD,
+            )
+            return
+    _DASH_PROBE_MISSES = 0
+
+    # Reclaim the port before respawning. kill_pid clears our recorded handle/
+    # pidfile, but the real port owner is frequently a *different*, older
+    # process (the recorded pid having become a corpse from an earlier failed
+    # spawn). Kill whatever actually listens on the port too, or the fresh
+    # process dies on bind with "address already in use" — the churn this fixes.
     kill_pid("dashboard")
+    _reclaim_tcp_port(port)
 
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     # The handle is duped into the detached Popen below and closed right after;
@@ -3072,7 +3166,18 @@ def _ensure_dashboard_running(config: dict) -> None:
         start_new_session=True,
     )
     dash_log.close()
+
+    # Record the pid, but never leave a dead child's pid behind: a stale pid is
+    # exactly what made port reclaim target the wrong process. Keep the handle
+    # so read_pid()/kill_pid() can poll()/reap a later death on the next cycle.
     write_pid("dashboard", proc.pid)
+    _OWNED_PROCS["dashboard"] = proc
+    time.sleep(2)
+    if proc.poll() is not None:
+        log.error("Dashboard exited immediately on start — check %s", LOG_DIR / "dashboard.log")
+        _OWNED_PROCS.pop("dashboard", None)
+        (PID_DIR / "dashboard.pid").unlink(missing_ok=True)
+        return
     log.info("Dashboard started: http://localhost:%d", port)
 
 

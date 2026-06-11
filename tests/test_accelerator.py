@@ -353,51 +353,149 @@ class TestPidManagement:
 
 
 class TestEnsureDashboardRunning:
+    @staticmethod
+    def _live_proc(pid: int = 12345) -> MagicMock:
+        # A spawned child that is still running: poll() returns None.
+        proc = MagicMock()
+        proc.pid = pid
+        proc.poll.return_value = None
+        return proc
+
+    def _reset_misses(self):
+        import immich_accelerator.__main__ as m
+
+        m._DASH_PROBE_MISSES = 0
+
     def test_2xx_response_means_running(self, tmp_data_dir):
         # A healthy dashboard that answers GET / with 200 must be left alone —
-        # no kill, no duplicate spawn.
+        # no kill, no port reclaim, no duplicate spawn.
+        self._reset_misses()
         resp = MagicMock()
         resp.status = 200
         with (
             patch("urllib.request.urlopen", return_value=resp),
             patch("immich_accelerator.__main__.kill_pid") as mock_kill,
+            patch("immich_accelerator.__main__._reclaim_tcp_port") as mock_reclaim,
             patch("immich_accelerator.__main__.subprocess.Popen") as mock_popen,
         ):
             _ensure_dashboard_running({})
         mock_kill.assert_not_called()
+        mock_reclaim.assert_not_called()
         mock_popen.assert_not_called()
 
     def test_http_500_is_unhealthy_and_respawns(self, tmp_data_dir):
         # A dashboard wedged on 500 holds the port but never serves. It must be
-        # reclaimed (kill_pid) and respawned, not mistaken for healthy.
+        # reclaimed (kill_pid + real port owner) and respawned immediately —
+        # no debounce — not mistaken for healthy.
         import email.message
         import urllib.error
 
+        self._reset_misses()
         err = urllib.error.HTTPError("http://localhost:8420/", 500, "err", email.message.Message(), None)
-        fake_proc = MagicMock()
-        fake_proc.pid = 12345
+        fake_proc = self._live_proc()
         with (
             patch("urllib.request.urlopen", side_effect=err),
             patch("immich_accelerator.__main__.kill_pid") as mock_kill,
+            patch("immich_accelerator.__main__._reclaim_tcp_port") as mock_reclaim,
             patch("immich_accelerator.__main__.subprocess.Popen", return_value=fake_proc) as mock_popen,
+            patch("immich_accelerator.__main__.time.sleep"),
             patch("immich_accelerator.__main__._get_process_start_time", return_value="t"),
         ):
             _ensure_dashboard_running({})
         mock_kill.assert_called_once_with("dashboard")
+        mock_reclaim.assert_called_once_with(8420)
         mock_popen.assert_called_once()
 
-    def test_connection_failure_spawns_dashboard(self, tmp_data_dir):
+    def test_connection_refused_spawns_dashboard(self, tmp_data_dir):
+        # A refused connection is a definite failure (nothing listening) — it
+        # respawns immediately, no debounce.
         import urllib.error
 
-        fake_proc = MagicMock()
-        fake_proc.pid = 12345
+        self._reset_misses()
+        fake_proc = self._live_proc()
         with (
-            patch("urllib.request.urlopen", side_effect=urllib.error.URLError("refused")),
+            patch("urllib.request.urlopen", side_effect=urllib.error.URLError(ConnectionRefusedError())),
+            patch("immich_accelerator.__main__._reclaim_tcp_port"),
             patch("immich_accelerator.__main__.subprocess.Popen", return_value=fake_proc) as mock_popen,
+            patch("immich_accelerator.__main__.time.sleep"),
             patch("immich_accelerator.__main__._get_process_start_time", return_value="t"),
         ):
             _ensure_dashboard_running({})
         mock_popen.assert_called_once()
+
+    def test_timeout_is_debounced_then_respawns(self, tmp_data_dir):
+        # A timed-out probe against the busy single-threaded dashboard is
+        # ambiguous: it must NOT tear the dashboard down on the first miss, but
+        # SHOULD respawn once misses reach the threshold. This is the false
+        # positive that caused endless respawn churn.
+        import urllib.error
+
+        import immich_accelerator.__main__ as m
+
+        self._reset_misses()
+        fake_proc = self._live_proc()
+        timeout_err = urllib.error.URLError(TimeoutError())
+        with (
+            patch("urllib.request.urlopen", side_effect=timeout_err),
+            patch("immich_accelerator.__main__._reclaim_tcp_port") as mock_reclaim,
+            patch("immich_accelerator.__main__.subprocess.Popen", return_value=fake_proc) as mock_popen,
+            patch("immich_accelerator.__main__.time.sleep"),
+            patch("immich_accelerator.__main__._get_process_start_time", return_value="t"),
+        ):
+            # First miss: debounced, no respawn.
+            _ensure_dashboard_running({})
+            mock_popen.assert_not_called()
+            mock_reclaim.assert_not_called()
+            assert m._DASH_PROBE_MISSES == 1
+            # Second miss reaches the threshold: respawn now.
+            _ensure_dashboard_running({})
+            mock_popen.assert_called_once()
+            mock_reclaim.assert_called_once_with(8420)
+
+    def test_healthy_probe_resets_miss_counter(self, tmp_data_dir):
+        # A single slow probe must not "stick" — a later healthy 2xx clears the
+        # accumulated miss count so the next slow probe starts fresh.
+        import urllib.error
+
+        import immich_accelerator.__main__ as m
+
+        self._reset_misses()
+        ok = MagicMock()
+        ok.status = 200
+        timeout_err = urllib.error.URLError(TimeoutError())
+        with (
+            patch("immich_accelerator.__main__._reclaim_tcp_port"),
+            patch("immich_accelerator.__main__.subprocess.Popen"),
+            patch("immich_accelerator.__main__.time.sleep"),
+            patch("immich_accelerator.__main__._get_process_start_time", return_value="t"),
+        ):
+            with patch("urllib.request.urlopen", side_effect=timeout_err):
+                _ensure_dashboard_running({})
+            assert m._DASH_PROBE_MISSES == 1
+            with patch("urllib.request.urlopen", return_value=ok):
+                _ensure_dashboard_running({})
+            assert m._DASH_PROBE_MISSES == 0
+
+    def test_dead_child_pid_not_recorded(self, tmp_data_dir):
+        # If the spawned dashboard dies immediately (e.g. a lost bind race), its
+        # dead pid must NOT be left in the pidfile — a stale pid is exactly what
+        # makes the next reclaim target the wrong process.
+        import urllib.error
+
+        self._reset_misses()
+        dead_proc = MagicMock()
+        dead_proc.pid = 999999
+        dead_proc.poll.return_value = 1  # already exited
+        pid_file = tmp_data_dir["pid_dir"] / "dashboard.pid"
+        with (
+            patch("urllib.request.urlopen", side_effect=urllib.error.URLError(ConnectionRefusedError())),
+            patch("immich_accelerator.__main__._reclaim_tcp_port"),
+            patch("immich_accelerator.__main__.subprocess.Popen", return_value=dead_proc),
+            patch("immich_accelerator.__main__.time.sleep"),
+            patch("immich_accelerator.__main__._get_process_start_time", return_value="t"),
+        ):
+            _ensure_dashboard_running({})
+        assert not pid_file.exists()
 
 
 # ---------------------------------------------------------------------------
