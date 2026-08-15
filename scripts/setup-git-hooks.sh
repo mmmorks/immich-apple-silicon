@@ -32,14 +32,27 @@ fi
 
 # --- clear a redundant core.hooksPath ----------------------------------------
 # pre-commit refuses to install when core.hooksPath is set. Worktree setups can
-# leave it pinned to the default hooks dir (which holds only *.sample files).
-# Unset it ONLY when it contains no real hooks; bail on a genuinely custom path
-# so we never clobber an intentional hooks setup.
+# leave it pinned to the repo's own default hooks dir. Unset it when it is
+# redundant — either it resolves to the default hooks dir (where hooks would be
+# read from anyway, so unsetting changes nothing) or it holds no real hooks.
+# Bail only on a genuinely custom path, so we never clobber an intentional setup.
 hooks_path="$(git config --get core.hooksPath || true)"
 if [ -n "$hooks_path" ]; then
   resolved="${hooks_path/#\~/$HOME}"
+  # NOTE: `git rev-parse --git-path hooks` honours core.hooksPath, so it would
+  # echo the pin straight back and every path would compare equal. The common
+  # git dir ignores core.hooksPath, and is where hooks live by default (it is
+  # also shared across linked worktrees).
+  default_hooks="$(git rev-parse --git-common-dir)/hooks"
+  # Compare canonical paths: a hooksPath equal to the default dir is a no-op
+  # pin, even once pre-commit has installed a real hook into it.
+  same_dir=""
+  if [ -d "$resolved" ] && [ -d "$default_hooks" ] \
+     && [ "$(cd "$resolved" && pwd -P)" = "$(cd "$default_hooks" && pwd -P)" ]; then
+    same_dir=1
+  fi
   real_hooks="$(find "$resolved" -maxdepth 1 -type f ! -name '*.sample' 2>/dev/null || true)"
-  if [ -z "$real_hooks" ]; then
+  if [ -n "$same_dir" ] || [ -z "$real_hooks" ]; then
     echo "Unsetting redundant core.hooksPath ($hooks_path) so pre-commit can manage hooks…"
     git config --unset-all core.hooksPath
   else
